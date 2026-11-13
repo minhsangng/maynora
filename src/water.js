@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mulberry32 } from './noise';
+import { SEA_FLOOR, SEABED_COLOR } from './terrain';
 
 const TAU = Math.PI * 2;
 
@@ -55,6 +56,7 @@ function makeProceduralNormalMap(size = 256) {
   return tex;
 }
 
+/** Tải normal map nước có sẵn (ảnh tileable). Lỗi thì trả null -> dùng bản tự sinh. */
 export async function loadWaterNormal(url) {
   try {
     const tex = await new THREE.TextureLoader().loadAsync(url);
@@ -95,10 +97,17 @@ export function createWater({ size, tile = 12, level = 0, material = null, norma
 
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2), mat);
 
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2),
+    new THREE.MeshLambertMaterial({ color: SEABED_COLOR }),
+  );
+
   return {
     mesh,
+    floor,
     update(dt, px, pz) {
       mesh.position.set(Math.round(px / tile) * tile, level, Math.round(pz / tile) * tile);
+      floor.position.set(px, SEA_FLOOR - 0.5, pz);
       const tex = mat.normalMap ?? mat.map;
       if (tex) {
         tex.offset.x = (tex.offset.x + dt * 0.02) % 1;

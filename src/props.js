@@ -3,6 +3,29 @@ import { makeLoader } from './loader';
 import { hash2D, mulberry32 } from './noise';
 import { WATER_LEVEL } from './terrain';
 
+/**
+ * Mỗi phần tử = 1 loại vật thể rải trên map (cây, đá, cỏ...).
+ *
+ *  name        tên (làm "salt" cho random -> thêm/bớt loại khác không làm đổi vị trí loại này)
+ *  variants    các model GLB khác nhau của loại này (đa dạng hình dáng).
+ *              { url, weight }: weight càng lớn càng hay xuất hiện.
+ *  sizes       các LỚP KÍCH THƯỚC: { height: [min, max] (mét), weight, drawChunks? }
+ *              Model tự được chuẩn hoá về cao 1m rồi scale theo `height` ở đây, nên model gốc to nhỏ
+ *              thế nào cũng được. drawChunks riêng cho từng lớp: vật nhỏ chỉ vẽ gần, vật to vẽ xa hơn.
+ *  jitter      độ méo ngẫu nhiên theo chiều ngang (0.15 = ±15%) để 2 vật cùng loại không giống hệt nhau
+ *  perChunk    số lần "thử đặt" trong mỗi chunk (số thực tế ít hơn vì bị lọc theo luật bên dưới)
+ *  minHeight / maxHeight   khoảng độ cao cho phép
+ *  maxSlope    độ dốc tối đa (|dh/dx| + |dh/dz|). 0.3 = gần phẳng, 1.2 = khá dốc
+ *  density     (gen, x, z) => boolean, ví dụ chỉ mọc ở vùng rừng
+ *  alignToGround  nghiêng theo mặt đất (hợp với đá)
+ *  sink        chôn xuống đất bao nhiêu % chiều cao (0.1 = 10%)
+ *  drawChunks  bán kính (chunk) vẽ mặc định nếu lớp kích thước không khai báo riêng
+ *  doubleSide  vẽ 2 mặt (cỏ / lá dạng tấm phẳng)
+ *  cutout      ngưỡng alphaTest (vd 0.5) cho cỏ/lá có texture trong suốt
+ *
+ * Lưu ý hiệu năng: số draw call/chunk = (số variant) x (số mức drawChunks khác nhau) x (số mesh trong model).
+ * Chỉ có 1-2 file model thì cứ để 1-2 variant, file nào không tồn tại sẽ tự bị bỏ qua.
+ */
 export const PROP_DEFS = [
   {
     name: 'tree',
@@ -12,16 +35,16 @@ export const PROP_DEFS = [
       { url: '/models/tree.glb', weight: 2 },
     ],
     sizes: [
-      { height: [3, 5], weight: 3, drawChunks: 2.5 },
-      { height: [6, 9], weight: 5, drawChunks: 3.5 },
-      { height: [10, 15], weight: 2, drawChunks: 5 },
+      { height: [3, 5], weight: 3, drawChunks: 2.5 }, // cây nhỏ / cây non
+      { height: [6, 9], weight: 5, drawChunks: 3.5 }, // cây vừa
+      { height: [10, 15], weight: 2, drawChunks: 5 }, // cây cao
     ],
     jitter: 0.12,
     perChunk: 80,
     minHeight: WATER_LEVEL + 2,
     maxHeight: 42,
     maxSlope: 1.2,
-    density: (gen, x, z) => gen.forest(x, z) > 0.05,
+    density: (gen, x, z) => gen.forest(x, z) > gen.forestThreshold, // ngưỡng rừng riêng của từng đảo
   },
   {
     name: 'rock',
@@ -71,6 +94,7 @@ function hashName(name) {
   return h;
 }
 
+/** Bảng xác suất cộng dồn theo weight, và hàm chọn theo số ngẫu nhiên r trong [0,1). */
 function makeCum(items) {
   const total = items.reduce((a, it) => a + (it.weight ?? 1), 0);
   let acc = 0;
@@ -81,8 +105,12 @@ function pick(cum, r) {
   return cum.length - 1;
 }
 
+/**
+ * Lấy độ cao + độ dốc NGAY TỪ LƯỚI VERTEX của chunk (không gọi lại hàm noise).
+ * Nội suy đúng theo 2 tam giác của mesh nên vật thể nằm khít mặt đất đang vẽ.
+ */
 function sampleGrid(g, lx, lz) {
-  const fx = lx / g.step + 1;
+  const fx = lx / g.step + 1; // +1 vì lưới có viền 1 ô
   const fz = lz / g.step + 1;
   const ix = Math.floor(fx);
   const iz = Math.floor(fz);
@@ -106,6 +134,11 @@ function sampleGrid(g, lx, lz) {
   return hit;
 }
 
+/**
+ * Gom mọi mesh trong GLB thành danh sách {geometry, material} đã "nướng" sẵn transform,
+ * chuẩn hoá về CAO 1 MÉT, chân ở y = 0, căn giữa X/Z.
+ * Mỗi phần (vd: thân + tán lá) thành 1 InstancedMesh riêng => 1 draw call mỗi phần, mỗi chunk.
+ */
 function extractParts(root, def) {
   root.updateMatrixWorld(true);
   const parts = [];
@@ -158,6 +191,7 @@ export class PropScatter {
     this.types = [];
   }
 
+  /** Tải mọi GLB (1 lần). Variant nào lỗi thì bỏ qua; cả loại không có variant nào thì bỏ loại đó. */
   async load() {
     const loader = makeLoader();
     const results = await Promise.all(
@@ -201,6 +235,12 @@ export class PropScatter {
     this.types = results.filter(Boolean);
   }
 
+  /**
+   * Rải vật thể cho 1 chunk. `grid` = lưới độ cao của chunk { hs, stride, step }.
+   * Mọi lựa chọn (vị trí, loại model, cỡ, xoay...) chỉ phụ thuộc (cx, cz, seed, name) và lưới độ cao
+   * nên build lại chunk lúc nào cũng ra đúng những vật thể đó.
+   * Trả về [{ mesh, drawChunks }].
+   */
   populate(cx, cz, group, grid) {
     const S = this.chunkSize;
     const gen = this.gen;
@@ -212,9 +252,10 @@ export class PropScatter {
       const maxH = def.maxHeight ?? Infinity;
       const maxSlope = def.maxSlope ?? Infinity;
       const jitter = def.jitter ?? 0;
-      const buckets = new Map();
+      const buckets = new Map(); // gộp theo (variant, drawChunks) -> 1 InstancedMesh mỗi nhóm
 
       for (let i = 0; i < def.perChunk; i++) {
+        // Luôn rút đủ số random mỗi vòng dù vật thể có bị loại hay không
         const lx = rand() * S;
         const lz = rand() * S;
         const rot = rand() * TAU;
@@ -231,7 +272,7 @@ export class PropScatter {
 
         const vi = pick(vCum, rv);
         const size = def.sizes[pick(sCum, rs)];
-        const s = size.height[0] + rt * (size.height[1] - size.height[0]);
+        const s = size.height[0] + rt * (size.height[1] - size.height[0]); // chiều cao thực (mét)
         const dc = size.drawChunks ?? def.drawChunks ?? Infinity;
 
         const key = `${vi}|${dc}`;
