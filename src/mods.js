@@ -13,7 +13,7 @@ export const MOD_DEFS = [
     ],
   },
   {
-    id: 'moc_ti', name: 'Mộc Tí', url: '/models/mods/demon.glb', color: 0x5cc45a, height: 1.1,
+    id: 'nhat_long', name: 'Nhất Long', url: '/models/mods/carnotaurus.glb', color: 0x5cc45a, height: 1.1,
     wildWeight: 2, hp: 54, atk: 10, defense: 7, spd: 8,
     moves: [
       { name: 'Quất dây', power: 11, accuracy: 100 },
@@ -22,7 +22,7 @@ export const MOD_DEFS = [
     ],
   },
   {
-    id: 'thuy_ti', name: 'Thủy Tí', url: '/models/mods/demon.glb', color: 0x4aa8ff, height: 1.1,
+    id: 'ca_sau', name: 'Cá Sấu', url: '/models/mods/crokie.glb', color: 0x4aa8ff, height: 1.1,
     wildWeight: 2, hp: 50, atk: 10, defense: 7, spd: 10,
     moves: [
       { name: 'Vỗ nước', power: 10, accuracy: 100 },
@@ -31,32 +31,10 @@ export const MOD_DEFS = [
     ],
   },
   {
-    id: 'soi_da', name: 'Sói Đá', url: '/models/mods/demon.glb', color: 0x8d8a85, height: 1.5,
+    id: 'quy_su', name: 'Quỷ Sư', url: '/models/mods/criatura_espelmatica.glb', color: 0x8d8a85, height: 1.5,
     wildWeight: 3, hp: 62, atk: 13, defense: 9, spd: 11,
-    moves: [
-      { name: 'Cắn', power: 12, accuracy: 100 },
-      { name: 'Ném đá', power: 17, accuracy: 88 },
-      { name: 'Vồ', power: 14, accuracy: 95 },
-    ],
-  },
-  {
-    id: 'cu_dem', name: 'Cú Đêm', url: '/models/mods/demon.glb', color: 0x6b4fa0, height: 1.0,
-    wildWeight: 2, hp: 44, atk: 14, defense: 5, spd: 14,
-    moves: [
-      { name: 'Mổ', power: 11, accuracy: 100 },
-      { name: 'Lao xuống', power: 18, accuracy: 85 },
-      { name: 'Vỗ cánh', power: 12, accuracy: 100 },
-    ],
-  },
-  {
-    id: 'rua_co', name: 'Rùa Cổ', url: '/models/mods/demon.glb', color: 0x4f8a6b, height: 1.3,
-    wildWeight: 1, hp: 80, atk: 9, defense: 14, spd: 4,
-    moves: [
-      { name: 'Húc mai', power: 10, accuracy: 100 },
-      { name: 'Dậm đất', power: 15, accuracy: 90 },
-      { name: 'Cắn', power: 12, accuracy: 100 },
-    ],
-  },
+    moves: [],
+  }
 ];
 
 const FADE = 0.2;

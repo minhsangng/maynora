@@ -6,10 +6,10 @@ const MAX_LEVEL = 30;
  * (Nhiệm vụ của từng đảo - để được dịch chuyển sang đảo khác - nằm trong islands.js)
  */
 export const QUEST_DEFS = [
-  { id: 'walk', title: 'Bước chân đầu tiên', desc: 'Đi bộ tổng cộng 150 m', stat: 'distance', goal: 150, reward: 'hoa_ti' },
-  { id: 'jump', title: 'Nhảy cẫng lên', desc: 'Nhảy 5 lần', stat: 'jumps', goal: 5, reward: 'moc_ti' },
-  { id: 'climb', title: 'Leo đồi', desc: 'Leo cao hơn điểm xuất phát 15 m', stat: 'maxClimb', goal: 15, reward: 'thuy_ti' },
-  { id: 'meet', title: 'Làm quen', desc: 'Lại gần 3 mod hoang dã', stat: 'meets', goal: 3, reward: 'soi_da' },
+  { id: 'walk', title: 'Bước chân đầu tiên', desc: 'Đi bộ tổng cộng 150 m', stat: 'distance', goal: 150, reward: 'quy_ti' },
+  { id: 'jump', title: 'Nhảy cẫng lên', desc: 'Nhảy 5 lần', stat: 'jumps', goal: 5, reward: 'ca_sau' },
+  { id: 'climb', title: 'Leo đồi', desc: 'Leo cao hơn điểm xuất phát 15 m', stat: 'maxClimb', goal: 15, reward: 'nhat_long' },
+  { id: 'meet', title: 'Làm quen', desc: 'Lại gần 3 mod hoang dã', stat: 'meets', goal: 3, reward: 'quy_su' },
 ];
 
 const DEFAULT_STATS = { distance: 0, jumps: 0, maxClimb: 0, meets: 0, wins: 0 };

@@ -21,12 +21,12 @@ export const ISLAND_DEFS = [
     radius: 700,
     relief: 0.8,
     forestThreshold: 0.1,
-    wild: ['hoa_ti', 'moc_ti', 'thuy_ti', 'soi_da'],
+    wild: ['quy_ti', 'ca_sau', 'quy_su', 'nhat_long'],
     landmarks: 3,
     quests: [
       { id: 'beacons', title: 'Thắp sáng hải đăng', desc: 'Chạm vào cả 3 cột sáng trên đảo', stat: 'landmarks', goal: 3 },
       { id: 'wins', title: 'Thợ săn mod', desc: 'Thắng 2 trận thách đấu', stat: 'wins', goal: 2 },
-      { id: 'meets', title: 'Nhà thám hiểm', desc: 'Gặp 5 mod hoang dã', stat: 'meets', goal: 5 },
+      { id: 'meets', title: 'Nhà thám hiểm', desc: 'Gặp 3 mod hoang dã', stat: 'meets', goal: 3 },
     ],
   },
   {

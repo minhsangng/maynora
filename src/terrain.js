@@ -32,7 +32,7 @@ export class TerrainGenerator {
 
   setIsland(def = {}) {
     this.seed = def.seed ?? 12345;
-    this.radius = def.radius ?? 600; // bán kính "danh nghĩa" của đảo (mét)
+    this.radius = def.radius ?? 400; // bán kính "danh nghĩa" của đảo (mét)
     this.relief = def.relief ?? 1; // độ gồ ghề: đồi núi cao thấp
     this.forestThreshold = def.forestThreshold ?? 0.05; // thấp hơn = nhiều rừng hơn
     this.shape = new SimplexNoise(this.seed);
