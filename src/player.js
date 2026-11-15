@@ -2,8 +2,10 @@ import * as THREE from 'three';
 import { makeLoader } from './loader';
 
 const EYE_HEIGHT = 1.6;
-const WALK_SPEED = 6;
-const RUN_SPEED = 14;
+const WALK_SPEED = 9; // m/s (đã gấp đôi so với trước)
+const RUN_SPEED = 22; // m/s khi giữ Shift (tốn thể lực + đói nhanh hơn, xem survival.js)
+const STEP_UP = 0.9; // mét: bước lên cao hơn mức này trong 1 bước thì coi là vách, bị chặn
+const MAX_SLOPE = 1.1; // độ dốc tối đa đi bộ lên được (1.1 ≈ 48°); dốc đứng hơn thì phải đi vòng
 const GRAVITY = 30;
 const JUMP_SPEED = 10;
 const MOUSE_SENS = 0.0022;
@@ -60,10 +62,27 @@ export class Player {
     this.walkable = null; // (x, z) => boolean: có được bước vào chỗ đó không (chặn không cho đi xuống biển sâu)
     this.onBlocked = null; // gọi khi bị chặn (tối đa 1 lần / 3 giây)
     this.blockCd = 0;
+    this.survival = null; // Survival (thể lực + độ đói); null = không giới hạn
+    this.resolve = null; // (pos) => void: đẩy pos ra khỏi vật cản (cây, đá) - do ChunkManager cung cấp
+    this.tmp = { x: 0, z: 0 };
+    this.grounded = false;
 
     camera.rotation.order = 'YXZ'; // yaw trước, pitch sau -> kiểu FPS chuẩn, không bị nghiêng
     this.buildPlaceholder();
     this.bindInput();
+  }
+
+  /** Có bước được từ (x0,z0) sang (x1,z1) không: không xuống biển sâu, không lên vách cao hay dốc quá đứng. */
+  canStep(x0, z0, x1, z1) {
+    if (this.walkable && !this.walkable(x1, z1)) return false;
+    const h1 = this.terrain.height(x1, z1);
+    if (h1 - this.position.y > STEP_UP) return false; // vách / sườn núi chắn ngay trước mặt
+    const d = Math.hypot(x1 - x0, z1 - z0);
+    if (d > 1e-6) {
+      const h0 = this.terrain.height(x0, z0);
+      if (this.position.y - h0 < 0.6 && (h1 - h0) / d > MAX_SLOPE) return false; // đang đứng trên đất: dốc quá đứng
+    }
+    return true;
   }
 
   /** Đặt người chơi vào vị trí mới (dịch chuyển). */
@@ -257,21 +276,38 @@ export class Player {
     let dx = -sy * f + cy * r;
     let dz = -cy * f - sy * r;
     const len = Math.hypot(dx, dz);
-    const running = k.has('ShiftLeft') || k.has('ShiftRight');
+    const surv = this.survival;
+    let running = false;
+    let effort = 0; // tốc độ hiện tại / tốc độ đi bộ (đưa cho Survival tính thể lực + độ đói)
+    let moveSpeed = 0;
     if (len > 0) {
       dx /= len;
       dz /= len;
-      const speed = running ? RUN_SPEED : WALK_SPEED;
-      const nx = this.position.x + dx * speed * dt;
-      const nz = this.position.z + dz * speed * dt;
-      if (!this.walkable || this.walkable(nx, nz)) {
-        this.position.x = nx;
-        this.position.z = nz;
+      // Hết thể lực / đói hẳn thì không chạy được; kiệt sức hoặc đói thì đi chậm lại
+      running = (k.has('ShiftLeft') || k.has('ShiftRight')) && (!surv || surv.canSprint);
+      moveSpeed = (running ? RUN_SPEED : WALK_SPEED) * (surv ? surv.speedMul : 1);
+      effort = moveSpeed / WALK_SPEED;
+
+      const x0 = this.position.x;
+      const z0 = this.position.z;
+      const t = this.tmp;
+      t.x = x0 + dx * moveSpeed * dt;
+      t.z = z0 + dz * moveSpeed * dt;
+      if (this.resolve) this.resolve(t); // trượt quanh thân cây, đá thay vì đi xuyên qua
+      if (this.canStep(x0, z0, t.x, t.z)) {
+        this.position.x = t.x;
+        this.position.z = t.z;
       } else {
-        // trượt dọc theo "bức tường" biển: thử đi riêng từng trục
-        if (this.walkable(nx, this.position.z)) this.position.x = nx;
-        else if (this.walkable(this.position.x, nz)) this.position.z = nz;
-        if (this.blockCd <= 0) {
+        // bị chặn (biển sâu, dốc đứng, vách): thử trượt dọc theo từng trục
+        let moved = false;
+        if (Math.abs(t.x - x0) > 1e-5 && this.canStep(x0, z0, t.x, z0)) {
+          this.position.x = t.x;
+          moved = true;
+        } else if (Math.abs(t.z - z0) > 1e-5 && this.canStep(x0, z0, x0, t.z)) {
+          this.position.z = t.z;
+          moved = true;
+        }
+        if (!moved && this.blockCd <= 0 && this.walkable && !this.walkable(t.x, t.z)) {
           this.blockCd = 3;
           this.onBlocked?.();
         }
@@ -279,21 +315,29 @@ export class Player {
       // thân người xoay dần về hướng đang đi (thấy được ở góc nhìn thứ 3)
       this.bodyYaw = lerpAngle(this.bodyYaw, Math.atan2(-dx, -dz), 1 - Math.exp(-12 * dt));
     }
+    surv?.update(dt, effort);
 
     if (this.faceYaw !== null) this.bodyYaw = lerpAngle(this.bodyYaw, this.faceYaw, 1 - Math.exp(-10 * dt));
 
     // Bám địa hình: lấy độ cao thẳng từ hàm height(), không cần raycast
     const ground = this.terrain.height(this.position.x, this.position.z);
+    // đang đứng trên đất mà xuống dốc nhanh thì dính chặt mặt đất, không "bay" khỏi sườn
+    const stick = 0.35 + moveSpeed * dt;
+    if (this.grounded && this.vy <= 0 && this.position.y - ground < stick) this.position.y = ground;
     const onGround = this.position.y - ground < 0.1;
-    if (onGround && !this.locked && k.has('Space')) {
+    if (onGround && !this.locked && k.has('Space') && (!surv || surv.canJump)) {
       this.vy = JUMP_SPEED;
       this.jumpCount++;
+      surv?.spendJump();
     }
     this.vy -= GRAVITY * dt;
     this.position.y += this.vy * dt;
     if (this.position.y <= ground) {
       this.position.y = ground;
       this.vy = 0;
+      this.grounded = true;
+    } else {
+      this.grounded = false;
     }
 
     // Chọn animation: trên không > chạy/đi > đứng yên

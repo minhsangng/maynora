@@ -1,334 +1,449 @@
 import * as THREE from 'three';
-import { SimplexNoise } from './noise';
+import { TerrainGenerator, WATER_LEVEL, SEA_FLOOR, SEABED_COLOR } from './terraingen';
+import { buildChunk } from './chunkbuild';
+import { InstanceBatch } from './instancing';
+import { FOOD_DEFS } from './fooddefs';
 
-export const WATER_LEVEL = 0;
-export const SEA_FLOOR = -8; // đáy biển phẳng: mọi thứ thấp hơn bị ép lên mức này
-export const SEABED_COLOR = 0x1d5f8a;
+export { TerrainGenerator, WATER_LEVEL, SEA_FLOOR, SEABED_COLOR };
 
-const TAU = Math.PI * 2;
-const COAST_STEPS = 720;
-
-const smoothstep = (a, b, x) => {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-};
+const MAX_INFLIGHT = 3; // số chunk gửi cho worker cùng lúc (ít để còn đổi ưu tiên khi người chơi di chuyển)
 
 /**
- * Địa hình của MỘT đảo, tâm ở (0, 0), xung quanh là biển.
- * Mọi thứ (mesh, cây, va chạm) đều suy ra từ các hàm THUẦN TÚY này:
- * cùng (x, z) + cùng đảo => luôn cùng kết quả, nên đảo luôn đồng nhất dù load/unload bao nhiêu lần.
- * Đổi sang đảo khác bằng setIsland() - đối tượng này giữ nguyên nên mọi nơi đang tham chiếu vẫn dùng được.
+ * Quản lý chunk:
+ *  - Dựng dữ liệu chunk trong Web Worker (không giật luồng chính). Không có Worker thì tự dựng 1 chunk / frame.
+ *  - Mặt đất: 1 mesh / chunk (three tự cắt ngoài khung hình).
+ *  - Cây / đá / cỏ / đồ ăn: gộp toàn cục bằng InstanceBatch => chỉ vài chục draw call dù có bao nhiêu chunk.
+ *  - Lưu vòng va chạm (cây, đá) và vị trí thực phẩm của từng chunk.
  */
-export class TerrainGenerator {
-  seed;
-  radius;
-  relief;
-  forestThreshold;
-  maxRadius;
-
-  constructor(island = {}) {
-    this.setIsland(typeof island === 'number' ? { seed: island } : island);
-  }
-
-  setIsland(def = {}) {
-    this.seed = def.seed ?? 12345;
-    this.radius = def.radius ?? 400; // bán kính "danh nghĩa" của đảo (mét)
-    this.relief = def.relief ?? 1; // độ gồ ghề: đồi núi cao thấp
-    this.forestThreshold = def.forestThreshold ?? 0.05; // thấp hơn = nhiều rừng hơn
-    this.shape = new SimplexNoise(this.seed);
-    this.forestNoise = new SimplexNoise(this.seed + 1337);
-
-    // Bảng bán kính bờ biển theo góc => đường bờ lồi lõm tự nhiên (không phải hình tròn)
-    const coastNoise = new SimplexNoise(this.seed + 4242);
-    this.coast = new Float32Array(COAST_STEPS + 1);
-    let maxR = 0;
-    for (let i = 0; i <= COAST_STEPS; i++) {
-      const a = (i / COAST_STEPS) * TAU;
-      const cx = Math.cos(a);
-      const cz = Math.sin(a);
-      const n = coastNoise.noise2D(cx * 1.3 + 7, cz * 1.3 + 3) + 0.5 * coastNoise.noise2D(cx * 2.7 - 5, cz * 2.7 + 11);
-      const r = this.radius * (1 + 0.28 * (n / 1.5));
-      this.coast[i] = r;
-      if (r > maxR) maxR = r;
-    }
-    this.maxRadius = maxR;
-  }
-
-  fbm(n, x, z, octaves) {
-    let amp = 1, freq = 1, sum = 0, norm = 0;
-    for (let i = 0; i < octaves; i++) {
-      sum += n.noise2D(x * freq, z * freq) * amp;
-      norm += amp;
-      amp *= 0.5;
-      freq *= 2;
-    }
-    return sum / norm;
-  }
-
-  /** Bán kính bờ biển theo góc a (radian). */
-  coastRadius(a) {
-    let t = a / TAU;
-    t -= Math.floor(t);
-    const f = t * COAST_STEPS;
-    const i = Math.floor(f);
-    const k = f - i;
-    return this.coast[i] * (1 - k) + this.coast[i + 1] * k;
-  }
-
-  /** Độ cao "đất liền" nếu không có biển bao quanh. Chỉnh các hệ số để đổi hình dạng đảo. */
-  landHeight(x, z) {
-    const continent = this.fbm(this.shape, x * 0.0012, z * 0.0012, 3);
-    const hills = this.fbm(this.shape, x * 0.008 + 50, z * 0.008 + 50, 5);
-    const ridge = 1 - Math.abs(this.shape.noise2D(x * 0.0035 - 200, z * 0.0035 + 200));
-    const mountainMask = smoothstep(0.05, 0.45, continent);
-    return 8 + continent * 20 + hills * 12 * this.relief + ridge ** 3 * 80 * this.relief * mountainMask;
-  }
-
-  /** Độ cao tại toạ độ thế giới (x, z). Ngoài đảo luôn là SEA_FLOOR. */
-  height(x, z) {
-    const d = Math.hypot(x, z);
-    const rEff = this.coastRadius(Math.atan2(z, x));
-    if (d >= rEff) return SEA_FLOOR; // ngoài khơi: khỏi tính noise
-    const mask = smoothstep(0, rEff * 0.3, rEff - d); // 0 ở bờ -> 1 khi vào trong 30% bán kính (bãi biển thoải)
-    return Math.max(SEA_FLOOR, -12 + (this.landHeight(x, z) + 12) * mask);
-  }
-
-  /** Chunk nằm hoàn toàn ngoài đảo (chỉ có biển) -> khỏi dựng mesh, đã có mặt nước + đáy biển lo. */
-  isOpenSea(cx, cz, S) {
-    const x0 = cx * S;
-    const z0 = cz * S;
-    const x1 = x0 + S;
-    const z1 = z0 + S;
-    const mx = x0 + S / 2;
-    const mz = z0 + S / 2;
-    const pts = [[x0, z0], [x1, z0], [x0, z1], [x1, z1], [mx, z0], [mx, z1], [x0, mz], [x1, mz]];
-    let rMax = 0;
-    for (const [x, z] of pts) rMax = Math.max(rMax, this.coastRadius(Math.atan2(z, x)));
-    const dMin = Math.hypot(mx, mz) - S * 0.7072; // khoảng cách gần nhất từ tâm đảo tới chunk
-    return dMin > rMax * 1.06;
-  }
-
-  /** Mật độ rừng, khoảng [-1, 1]. */
-  forest(x, z) {
-    return this.fbm(this.forestNoise, x * 0.01, z * 0.01, 2);
-  }
-}
-
-const GRASS = new THREE.Color(0x5c9e3a);
-const HIGH_GRASS = new THREE.Color(0x3f6b34);
-const SAND = new THREE.Color(0xd9c58f);
-const ROCK = new THREE.Color(0x7d7a74);
-const SNOW = new THREE.Color(0xf4f7fb);
-const SEABED = new THREE.Color(SEABED_COLOR);
-
 export class ChunkManager {
-  viewDistance;
-
-  scene;
-  gen;
-  opts;
-  chunks = new Map();
-  queue = [];
-  lastCx = NaN;
-  lastCz = NaN;
-
-  terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true });
-
-  constructor(scene, gen, opts, props = null) {
-    this.props = props; // PropScatter (tuỳ chọn) - rải model GLB lên chunk
+  constructor(scene, gen, props, options = {}) {
     this.scene = scene;
     this.gen = gen;
-    this.opts = opts;
-    this.viewDistance = opts.chunkSize * opts.viewRadius;
+    this.props = props;
+    this.cfg = {
+      chunkSize: 64,
+      resolution: 40, // số ô lưới / cạnh chunk
+      viewRadius: 4, // bán kính nạp (chunk)
+      propScale: 1, // nhân số lượng cây/đá
+      grassScale: 1, // nhân số lượng cỏ (0 = tắt)
+      drawScale: 1, // nhân khoảng cách vẽ của prop
+      foodScale: 1,
+      foodDraw: 2.5, // bán kính vẽ thực phẩm (chunk)
+      bake: false, // true: nướng ánh sáng vào màu đỉnh + dùng material không đèn (nhẹ nhất)
+      simpleMaterials: false, // true: đổi vật liệu PBR của model sang Lambert (nhẹ hơn nhiều)
+      ...options,
+    };
+    this.chunks = new Map(); // key -> { mesh, colliders, food: [...] }
+    this.pending = new Set();
+    this.queue = [];
+    this.ready = [];
+    this.batches = [];
+    this.propBatches = new Map(); // `${ti}|${vi}` -> [InstanceBatch theo từng mesh con của model]
+    this.foodBatches = [];
+    this.own = []; // geometry/material tự tạo, cần dispose
+    this.epoch = 0;
+    this.lastCx = NaN;
+    this.lastCz = NaN;
+    this.batchDirty = true;
+    this.lastRebuild = 0;
+    this.terrainMat = null;
+    this.indexTemplate = null;
+
+    this.frustum = new THREE.Frustum();
+    this.pv = new THREE.Matrix4();
+    this.sphere = new THREE.Sphere();
+    this.lastCamPos = new THREE.Vector3(1e9, 1e9, 1e9);
+    this.lastCamQuat = new THREE.Quaternion();
+    this.visibleFn = (seg) => this.isVisible(seg);
+
+    this.worker = null;
+    this.startWorker();
+    this.rebuildAll();
+  }
+
+  get viewDistance() {
+    return this.cfg.viewRadius * this.cfg.chunkSize;
   }
 
   get loadedCount() {
     return this.chunks.size;
   }
 
-  /**
-   * Gọi mỗi frame.
-   * `budgetMs`  = ngân sách thời gian build chunk trong frame này (luôn build ít nhất 1 chunk nếu còn hàng đợi)
-   * `maxCount`  = số chunk tối đa (dùng để load nhanh vài chunk gần nhất lúc khởi động)
-   */
-  update(px, pz, budgetMs = 4, maxCount = Infinity) {
-    const S = this.opts.chunkSize;
-    const ccx = Math.floor(px / S);
-    const ccz = Math.floor(pz / S);
+  get pendingCount() {
+    return this.pending.size + this.ready.length;
+  }
 
-    // Chỉ tính lại danh sách khi player sang chunk mới
-    if (ccx !== this.lastCx || ccz !== this.lastCz) {
-      this.lastCx = ccx;
-      this.lastCz = ccz;
-      this.refreshQueue(ccx, ccz);
-      this.unloadFar(ccx, ccz);
-      this.updatePropVisibility();
-    }
-
-    const t0 = performance.now();
-    let built = 0;
-    while (this.queue.length > 0 && built < maxCount) {
-      const { cx, cz } = this.queue.shift();
-      if (this.chunks.has(`${cx},${cz}`)) continue;
-      this.load(cx, cz);
-      built++;
-      if (performance.now() - t0 >= budgetMs) break; // hết ngân sách -> để frame sau
+  startWorker() {
+    if (typeof Worker === 'undefined') return;
+    try {
+      const w = new Worker(new URL('./chunkWorker.js', import.meta.url), { type: 'module' });
+      w.onmessage = (e) => {
+        if (e.data.type === 'chunk') this.ready.push(e.data);
+      };
+      w.onerror = (e) => {
+        console.warn('[chunks] Worker lỗi -> dựng chunk trên luồng chính (chậm hơn)', e.message);
+        this.worker = null;
+        this.pending.clear();
+        this.lastCx = NaN;
+      };
+      this.worker = w;
+    } catch (err) {
+      console.warn('[chunks] Không tạo được Worker -> dựng chunk trên luồng chính', err);
+      this.worker = null;
     }
   }
 
-  refreshQueue(ccx, ccz) {
-    const R = this.opts.viewRadius;
-    const missing = [];
-    for (let dz = -R; dz <= R; dz++) {
-      for (let dx = -R; dx <= R; dx++) {
-        const d = dx * dx + dz * dz;
-        if (d > R * R) continue; // vùng tròn
-        const cx = ccx + dx, cz = ccz + dz;
-        if (this.gen.isOpenSea(cx, cz, this.opts.chunkSize)) continue; // ngoài khơi: không dựng
-        if (!this.chunks.has(`${cx},${cz}`)) missing.push({ cx, cz, d });
-      }
-    }
-    missing.sort((a, b) => a.d - b.d); // chunk gần player build trước
-    this.queue = missing;
+  /** Đổi cấu hình (mức chất lượng). Có thay đổi thì dựng lại toàn bộ chunk. */
+  configure(patch = {}) {
+    const keys = Object.keys(patch);
+    if (!keys.some((k) => patch[k] !== this.cfg[k])) return;
+    this.cfg = { ...this.cfg, ...patch };
+    this.rebuildAll();
   }
 
-  /** Bỏ toàn bộ chunk đang load (dùng khi chuyển đảo). */
+  /** Bỏ hết chunk và dựng lại từ đầu (đổi đảo hoặc đổi chất lượng). Gọi sau terrain.setIsland(). */
   reset() {
-    for (const chunk of this.chunks.values()) this.disposeChunk(chunk);
-    this.chunks.clear();
+    this.rebuildAll();
+  }
+
+  rebuildAll() {
+    this.disposeAll();
+    this.epoch++;
+    this.ready.length = 0;
+    this.pending.clear();
     this.queue = [];
     this.lastCx = NaN;
     this.lastCz = NaN;
-  }
+    this.batchDirty = true;
+    this.makeTerrainMaterial();
+    this.makeIndexTemplate();
+    this.makeBatches();
 
-  unloadFar(ccx, ccz) {
-    const limit = (this.opts.viewRadius + 1) ** 2; // +1 để tránh load/unload liên tục ở rìa
-    for (const [key, chunk] of this.chunks) {
-      const [cx, cz] = key.split(',').map(Number);
-      if ((cx - ccx) ** 2 + (cz - ccz) ** 2 > limit) {
-        this.disposeChunk(chunk);
-        this.chunks.delete(key);
-      }
+    this.propInfo = this.props.info();
+    this.buildCfg = {
+      chunkSize: this.cfg.chunkSize,
+      resolution: this.cfg.resolution,
+      propScale: this.cfg.propScale,
+      grassScale: this.cfg.grassScale,
+      foodScale: this.cfg.foodScale,
+      bake: this.cfg.bake,
+    };
+    if (this.worker) {
+      this.worker.postMessage({
+        type: 'init',
+        epoch: this.epoch,
+        island: {
+          seed: this.gen.seed,
+          radius: this.gen.radius,
+          relief: this.gen.relief,
+          forestThreshold: this.gen.forestThreshold,
+        },
+        cfg: this.buildCfg,
+        propInfo: this.propInfo,
+      });
     }
   }
 
-  load(cx, cz) {
-    const key = `${cx},${cz}`;
-    const chunk = this.build(cx, cz);
-    this.chunks.set(key, chunk);
-    this.applyPropVisibility(key, chunk);
+  makeTerrainMaterial() {
+    this.terrainMat?.dispose();
+    this.terrainMat = this.cfg.bake
+      ? new THREE.MeshBasicMaterial({ vertexColors: true })
+      : new THREE.MeshLambertMaterial({ vertexColors: true });
   }
 
-  /** Prop nặng (vd cỏ) chỉ được vẽ ở các chunk gần player (theo drawChunks). */
-  updatePropVisibility() {
-    for (const [key, chunk] of this.chunks) this.applyPropVisibility(key, chunk);
-  }
-
-  applyPropVisibility(key, chunk) {
-    const [cx, cz] = key.split(',').map(Number);
-    const d2 = (cx - this.lastCx) ** 2 + (cz - this.lastCz) ** 2;
-    for (const p of chunk.props) p.mesh.visible = d2 <= p.drawChunks ** 2;
-  }
-
-  disposeChunk(chunk) {
-    chunk.group.removeFromParent();
-    chunk.mesh.geometry.dispose();
-    // geometry/material của model GLB dùng chung cho mọi chunk nên KHÔNG dispose,
-    // chỉ giải phóng bảng ma trận instance của chunk này
-    for (const p of chunk.props) p.mesh.dispose();
-  }
-
-  colorAt(h, ny, out) {
-    out.copy(GRASS).lerp(HIGH_GRASS, smoothstep(8, 35, h));
-    out.lerp(SAND, 1 - smoothstep(WATER_LEVEL + 0.3, WATER_LEVEL + 2.2, h));
-    const rockT = smoothstep(0.1, 0.28, 1 - ny); // dốc đứng -> đá
-    out.lerp(ROCK, rockT);
-    out.lerp(SNOW, smoothstep(55, 70, h) * (1 - 0.6 * rockT)); // đỉnh cao -> tuyết
-    out.lerp(SEABED, smoothstep(WATER_LEVEL - 0.5, WATER_LEVEL - 5, h)); // dưới nước -> màu đáy biển (khớp mặt đáy)
-  }
-
-  build(cx, cz) {
-    const S = this.opts.chunkSize;
-    const R = this.opts.resolution;
-    const step = S / R;
-    const N = R + 1; // số vertex / cạnh
-    const stride = R + 3; // lưới độ cao có viền 1 ô mỗi phía để tính normal
-    const ox = cx * S;
-    const oz = cz * S;
-
-    // 1) Lấy mẫu độ cao theo TOẠ ĐỘ THẾ GIỚI. Vertex biên của 2 chunk kề nhau
-    // có cùng toạ độ => cùng độ cao => không bị nứt.
-    // Viết (i * S) / R thay vì i * step để vertex biên khớp tuyệt đối.
-    const hs = new Float32Array(stride * stride);
-    for (let gz = 0; gz < stride; gz++) {
-      for (let gx = 0; gx < stride; gx++) {
-        hs[gz * stride + gx] = this.gen.height(ox + ((gx - 1) * S) / R, oz + ((gz - 1) * S) / R);
-      }
-    }
-
-    // 2) Dựng vertex (toạ độ cục bộ trong chunk, giúp tránh lỗi số thực khi đi rất xa)
-    const pos = new Float32Array(N * N * 3);
-    const nor = new Float32Array(N * N * 3);
-    const col = new Float32Array(N * N * 3);
-    const c = new THREE.Color();
-    for (let iz = 0; iz < N; iz++) {
-      for (let ix = 0; ix < N; ix++) {
-        const g = (iz + 1) * stride + (ix + 1);
-        const h = hs[g];
-        // normal từ chênh lệch độ cao của ô lân cận (kể cả ô nằm ngoài chunk) => liền mạch
-        const nx = (hs[g - 1] - hs[g + 1]) / (2 * step);
-        const nz = (hs[g - stride] - hs[g + stride]) / (2 * step);
-        const inv = 1 / Math.hypot(nx, 1, nz);
-        const i3 = (iz * N + ix) * 3;
-        pos[i3] = ix * step;
-        pos[i3 + 1] = h;
-        pos[i3 + 2] = iz * step;
-        nor[i3] = nx * inv;
-        nor[i3 + 1] = inv;
-        nor[i3 + 2] = nz * inv;
-        this.colorAt(h, inv, c);
-        col[i3] = c.r;
-        col[i3 + 1] = c.g;
-        col[i3 + 2] = c.b;
-      }
-    }
-
-    const idx = new Uint32Array(R * R * 6);
+  makeIndexTemplate() {
+    const R = this.cfg.resolution;
+    const N = R + 1;
+    const idx = N * N > 65535 ? new Uint32Array(R * R * 6) : new Uint16Array(R * R * 6);
     let k = 0;
     for (let iz = 0; iz < R; iz++) {
       for (let ix = 0; ix < R; ix++) {
         const a = iz * N + ix;
         const b = a + 1;
-        const cc = a + N;
-        const d = cc + 1;
-        idx[k++] = a; idx[k++] = cc; idx[k++] = b;
-        idx[k++] = b; idx[k++] = cc; idx[k++] = d;
+        const c = a + N;
+        const d = c + 1;
+        idx[k++] = a; idx[k++] = c; idx[k++] = b;
+        idx[k++] = b; idx[k++] = c; idx[k++] = d;
       }
     }
+    this.indexTemplate = idx;
+  }
 
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-    geo.setIndex(new THREE.BufferAttribute(idx, 1));
-    geo.computeBoundingSphere();
+  makeBatches() {
+    const cfg = this.cfg;
+    const chunksIn = (r) => Math.ceil(Math.PI * (r + 0.8) ** 2);
 
-    const group = new THREE.Group();
-    group.position.set(ox, 0, oz);
-    const mesh = new THREE.Mesh(geo, this.terrainMat);
-    group.add(mesh);
-
-    // 3) Rải model GLB (cây, đá, cỏ...). Vị trí suy ra từ seed + (cx, cz) nên luôn cố định
-    // Dùng lại lưới độ cao `hs` để đặt vật thể -> không phải gọi lại noise
-    const props = this.props ? this.props.populate(cx, cz, group, { hs, stride, step }) : [];
-
-    // Chunk là vật tĩnh: tắt tự cập nhật ma trận mỗi frame (đỡ tốn CPU khi có hàng trăm object)
-    group.updateMatrix();
-    group.traverse((o) => {
-      o.matrixAutoUpdate = false;
+    this.props.types.forEach((t, ti) => {
+      const def = t.def;
+      const attempts = Math.floor(def.perChunk * cfg.propScale * (def.groundCover ? cfg.grassScale : 1));
+      if (attempts <= 0) return;
+      const farthest = Math.max(...def.sizes.map((s) => s.drawChunks ?? def.drawChunks ?? cfg.viewRadius));
+      const capacity = Math.max(16, attempts * chunksIn(Math.min(cfg.viewRadius, farthest * Math.max(1, cfg.drawScale))));
+      t.variants.forEach((v, vi) => {
+        const list = v.parts.map((part) => {
+          const b = new InstanceBatch(this.scene, part.geometry, cfg.simpleMaterials ? part.materialSimple : part.material, capacity);
+          this.batches.push(b);
+          return b;
+        });
+        this.propBatches.set(`${ti}|${vi}`, list);
+      });
     });
 
-    this.scene.add(group);
-    return { group, mesh, props };
+    this.foodBatches = FOOD_DEFS.map((def) => {
+      const geo = def.shape === 'cone' ? new THREE.ConeGeometry(1, 1.4, 8) : new THREE.SphereGeometry(1, 8, 6);
+      const mat = new THREE.MeshBasicMaterial({ color: def.color });
+      this.own.push(geo, mat);
+      const capacity = Math.max(16, Math.floor(def.perChunk * cfg.foodScale) * chunksIn(cfg.foodDraw));
+      const b = new InstanceBatch(this.scene, geo, mat, capacity);
+      this.batches.push(b);
+      return b;
+    });
+  }
+
+  disposeChunk(chunk) {
+    chunk.mesh.removeFromParent();
+    chunk.mesh.geometry.dispose();
+  }
+
+  disposeAll() {
+    for (const c of this.chunks.values()) this.disposeChunk(c);
+    this.chunks.clear();
+    for (const b of this.batches) b.dispose();
+    this.batches = [];
+    this.propBatches.clear();
+    this.foodBatches = [];
+    for (const o of this.own) o.dispose();
+    this.own = [];
+  }
+
+  // ---------------------------------------------------------------- nạp / bỏ chunk
+
+  /**
+   * Gọi mỗi frame với vị trí người chơi và camera.
+   * opts.budgetMs: thời gian tối đa để dựng mesh từ kết quả worker trong frame này.
+   */
+  update(px, pz, camera, opts = {}) {
+    const S = this.cfg.chunkSize;
+    const ccx = Math.floor(px / S);
+    const ccz = Math.floor(pz / S);
+    if (ccx !== this.lastCx || ccz !== this.lastCz) {
+      this.lastCx = ccx;
+      this.lastCz = ccz;
+      this.refreshQueue(ccx, ccz);
+      this.unloadFar();
+      this.batchDirty = true;
+    }
+    this.pump();
+    this.applyReady(opts.budgetMs ?? 2);
+    this.updateBatches(camera);
+  }
+
+  refreshQueue(ccx, ccz) {
+    const R = this.cfg.viewRadius;
+    const S = this.cfg.chunkSize;
+    const missing = [];
+    for (let dz = -R; dz <= R; dz++) {
+      for (let dx = -R; dx <= R; dx++) {
+        const d = dx * dx + dz * dz;
+        if (d > R * R) continue; // vùng tròn
+        const cx = ccx + dx;
+        const cz = ccz + dz;
+        const key = `${cx},${cz}`;
+        if (this.chunks.has(key) || this.pending.has(key)) continue;
+        if (this.gen.isOpenSea(cx, cz, S)) continue; // ngoài khơi: không cần mesh
+        missing.push({ cx, cz, d });
+      }
+    }
+    missing.sort((a, b) => a.d - b.d); // chunk gần player dựng trước
+    this.queue = missing;
+  }
+
+  tooFar(cx, cz) {
+    const lim = (this.cfg.viewRadius + 1) ** 2; // +1 để tránh nạp/bỏ liên tục ở rìa
+    return (cx - this.lastCx) ** 2 + (cz - this.lastCz) ** 2 > lim;
+  }
+
+  unloadFar() {
+    for (const [key, chunk] of this.chunks) {
+      if (this.tooFar(chunk.cx, chunk.cz)) {
+        this.disposeChunk(chunk);
+        this.chunks.delete(key);
+        for (const b of this.batches) b.remove(key);
+      }
+    }
+  }
+
+  pump() {
+    while (this.queue.length > 0) {
+      if (this.worker && this.pending.size >= MAX_INFLIGHT) break;
+      if (!this.worker && this.ready.length > 0) break; // không có worker: 1 chunk / frame
+      const { cx, cz } = this.queue.shift();
+      const key = `${cx},${cz}`;
+      if (this.chunks.has(key) || this.pending.has(key) || this.tooFar(cx, cz)) continue;
+      this.pending.add(key);
+      if (this.worker) {
+        this.worker.postMessage({ type: 'build', epoch: this.epoch, cx, cz });
+      } else {
+        const r = buildChunk(this.gen, this.buildCfg, this.propInfo, cx, cz);
+        r.epoch = this.epoch;
+        this.ready.push(r);
+      }
+    }
+  }
+
+  applyReady(budgetMs) {
+    const t0 = performance.now();
+    while (this.ready.length > 0) {
+      this.applyResult(this.ready.shift());
+      if (performance.now() - t0 >= budgetMs) break;
+    }
+  }
+
+  applyResult(r) {
+    const key = `${r.cx},${r.cz}`;
+    if (r.epoch !== this.epoch) return; // kết quả của đảo / cấu hình cũ
+    this.pending.delete(key);
+    if (this.chunks.has(key) || this.tooFar(r.cx, r.cz)) return;
+
+    const S = this.cfg.chunkSize;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(r.pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(r.nor, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(r.col, 3));
+    geo.setIndex(new THREE.BufferAttribute(this.indexTemplate.slice(), 1));
+    const h = r.maxY - r.minY;
+    geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(S / 2, (r.minY + r.maxY) / 2, S / 2), Math.hypot(S / 2, S / 2, h / 2));
+    const mesh = new THREE.Mesh(geo, this.terrainMat);
+    mesh.position.set(r.cx * S, 0, r.cz * S);
+    mesh.updateMatrix();
+    mesh.matrixAutoUpdate = false; // chunk là vật tĩnh
+    this.scene.add(mesh);
+
+    // Mặt cầu bao quanh chunk (cho việc cắt theo khung hình của prop)
+    const meta = {
+      cx: r.cx,
+      cz: r.cz,
+      wx: r.cx * S + S / 2,
+      wz: r.cz * S + S / 2,
+      cy: (r.minY + r.maxY) / 2,
+      r: Math.hypot(S * 0.7072, h / 2),
+    };
+    for (const p of r.props) {
+      const list = this.propBatches.get(`${p.ti}|${p.vi}`);
+      if (!list) continue;
+      for (const b of list) b.set(key, p.data, p.n, { ...meta, dc: p.dc });
+    }
+    const food = [];
+    for (const f of r.food) {
+      this.foodBatches[f.ti]?.set(key, f.data, f.n, { ...meta, dc: this.cfg.foodDraw });
+      food.push({ id: FOOD_DEFS[f.ti].id, n: f.n, pos: f.pos, data: f.data, taken: new Uint8Array(f.n) });
+    }
+
+    this.chunks.set(key, { cx: r.cx, cz: r.cz, mesh, colliders: r.colliders, food });
+    this.batchDirty = true;
+  }
+
+  /** Chờ vài chunk đầu tiên quanh (px, pz) nạp xong (dùng lúc vào đảo, khi màn hình đang tối). */
+  async waitInitial(px, pz, camera, count = 9, timeoutMs = 10000) {
+    const t0 = performance.now();
+    while (this.chunks.size < count && performance.now() - t0 < timeoutMs) {
+      this.update(px, pz, camera, { budgetMs: 50 });
+      await new Promise((resolve) => setTimeout(resolve, 16));
+    }
+  }
+
+  // ---------------------------------------------------------------- vẽ prop
+
+  isVisible(seg) {
+    const dx = seg.cx - this.lastCx;
+    const dz = seg.cz - this.lastCz;
+    const lim = seg.dc * this.cfg.drawScale;
+    if (dx * dx + dz * dz > lim * lim) return false;
+    this.sphere.center.set(seg.wx, seg.cy, seg.wz);
+    this.sphere.radius = seg.r + 40; // chừa lề để khi quay camera nhanh không thấy cây "hiện ra"
+    return this.frustum.intersectsSphere(this.sphere);
+  }
+
+  updateBatches(camera) {
+    const now = performance.now();
+    const moved =
+      camera.position.distanceToSquared(this.lastCamPos) > 9 || camera.quaternion.dot(this.lastCamQuat) < 0.9995;
+    const due = this.batchDirty || (moved && now - this.lastRebuild > 80) || now - this.lastRebuild > 500;
+    if (!due) return;
+    camera.updateMatrixWorld();
+    this.pv.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.pv);
+    for (const b of this.batches) b.rebuild(this.visibleFn);
+    this.lastCamPos.copy(camera.position);
+    this.lastCamQuat.copy(camera.quaternion);
+    this.lastRebuild = now;
+    this.batchDirty = false;
+  }
+
+  // ---------------------------------------------------------------- va chạm & thực phẩm
+
+  /**
+   * Đẩy (pos.x, pos.z) ra khỏi các vật cản (thân cây, đá) trong bán kính `radius`.
+   * Vì là đẩy ra theo pháp tuyến nên người chơi tự "trượt" quanh vật cản thay vì bị kẹt.
+   * Trả về true nếu có va chạm.
+   */
+  resolve(pos, radius) {
+    const S = this.cfg.chunkSize;
+    const ccx = Math.floor(pos.x / S);
+    const ccz = Math.floor(pos.z / S);
+    let hit = false;
+    for (let pass = 0; pass < 2; pass++) {
+      for (let dz = -1; dz <= 1; dz++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const c = this.chunks.get(`${ccx + dx},${ccz + dz}`);
+          if (!c) continue;
+          const a = c.colliders;
+          for (let i = 0; i < a.length; i += 3) {
+            const ddx = pos.x - a[i];
+            const ddz = pos.z - a[i + 1];
+            const rr = a[i + 2] + radius;
+            const d2 = ddx * ddx + ddz * ddz;
+            if (d2 < rr * rr) {
+              const d = Math.sqrt(d2) || 1e-4;
+              const push = rr - d;
+              pos.x += (ddx / d) * push;
+              pos.z += (ddz / d) * push;
+              hit = true;
+            }
+          }
+        }
+      }
+    }
+    return hit;
+  }
+
+  /** Nhặt thực phẩm trong bán kính `radius` quanh người chơi. Trả về danh sách id đã nhặt. */
+  collectFood(px, py, pz, radius) {
+    const S = this.cfg.chunkSize;
+    const ccx = Math.floor(px / S);
+    const ccz = Math.floor(pz / S);
+    const r2 = radius * radius;
+    const picked = [];
+    for (let dz = -1; dz <= 1; dz++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const c = this.chunks.get(`${ccx + dx},${ccz + dz}`);
+        if (!c) continue;
+        for (const f of c.food) {
+          for (let i = 0; i < f.n; i++) {
+            if (f.taken[i]) continue;
+            const ex = f.pos[i * 3] - px;
+            const ey = f.pos[i * 3 + 1] - py;
+            const ez = f.pos[i * 3 + 2] - pz;
+            if (ex * ex + ez * ez < r2 && Math.abs(ey) < 3) {
+              f.taken[i] = 1;
+              f.data.fill(0, i * 16, i * 16 + 16); // ma trận 0 => không còn vẽ
+              picked.push(f.id);
+              this.batchDirty = true;
+            }
+          }
+        }
+      }
+    }
+    return picked;
   }
 }

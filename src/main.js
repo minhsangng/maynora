@@ -8,6 +8,9 @@ import { WildSpawner } from './wild';
 import { GameState, QuestManager } from './quests';
 import { BattleSystem } from './battle';
 import { ISLAND_DEFS, Landmarks } from './islands';
+import { Survival } from './survival';
+import { FOOD_INFO } from './fooddefs';
+import { TIERS, loadTierIndex, saveTierIndex, chunkConfig } from './quality';
 import { UI } from './ui';
 
 // --- Đảo ----------------------------------------------------------------
@@ -17,20 +20,13 @@ const ISLANDS = ISLAND_DEFS;
 const TELEPORT_DELAY = 5; // giây chờ sau khi xong hết nhiệm vụ đảo rồi mới dịch chuyển
 
 // --- Hiệu năng ----------------------------------------------------------
+// Chất lượng chỉnh trong quality.js (4 mức). Game tự hạ mức khi FPS thấp; bạn đổi tay bằng phím [ và ].
 const CHUNK_SIZE = 64;
-const CHUNK_RESOLUTION = 40; // số ô lưới / cạnh chunk (cao hơn = mịn hơn nhưng nặng hơn)
-const VIEW_RADIUS = 5; // chunk. Giảm số này là cách giảm tải nhanh nhất (số chunk ~ bình phương)
-
-// Sương mù: tính theo tỉ lệ của tầm nhìn. NEAR càng lớn thì càng ít mờ.
-const FOG_NEAR = 0.55;
+const FOG_NEAR = 0.55; // sương mù tính theo tỉ lệ tầm nhìn: NEAR càng lớn thì càng ít mờ
 const FOG_FAR = 0.95;
-
-// Độ phân giải: không bao giờ hạ xuống dưới MIN (hạ thấp hơn 1 sẽ làm ảnh bị nhoè).
-// Máy yếu thì có thể hạ MIN xuống 0.75.
-const MAX_PIXEL_RATIO = Math.min(window.devicePixelRatio, 2);
-const MIN_PIXEL_RATIO = 1;
-// Màn hình thường (DPR 1) cần khử răng cưa; màn hình độ phân giải cao thì không cần
-const ANTIALIAS = window.devicePixelRatio < 1.5;
+const savedTier = loadTierIndex();
+// Khử răng cưa chỉ bật ở mức Cao trở lên trên màn hình thường (màn hình độ phân giải cao không cần)
+const ANTIALIAS = window.devicePixelRatio < 1.5 && savedTier >= 2;
 
 // --- Nước ---------------------------------------------------------------
 // KHÔNG cần model nước. Mặc định dùng normal map tự sinh bằng code.
@@ -42,6 +38,8 @@ const MAX_WADE_DEPTH = 1.0; // mét: biển sâu hơn mức này thì người c
 
 // --- Nhân vật -----------------------------------------------------------
 const PLAYER_MODEL = '/models/mayn.glb';
+const PLAYER_RADIUS = 0.4; // bán kính va chạm với cây, đá
+const PICKUP_RADIUS = 2.4; // lại gần thực phẩm trong phạm vi này thì tự nhặt
 const PLAYER_OPTS = {
   height: 1.75,
   facing: Math.PI, // nhân vật đi lùi / quay lưng thì đổi 0 <-> Math.PI
@@ -58,10 +56,10 @@ const PLAYER_OPTS = {
 };
 
 // --- Mod hoang dã & thách đấu -------------------------------------------
-// Danh sách mod (model, chỉ số, chiêu) chỉnh trong mods.js; nhiệm vụ nhận mod chỉnh trong quests.js.
+// Danh sách mod (model, chỉ số, chiêu, animation) chỉnh trong mods.js; nhiệm vụ nhận mod chỉnh trong quests.js.
 const CHALLENGE_RANGE = 9; // mét: lại gần mod trong phạm vi này mới nhấn J được
 const WILD = {
-  max: 6, // số mod hoang dã tối đa cùng lúc
+  max: 6, // số mod hoang dã tối đa cùng lúc (mức chất lượng sẽ ghi đè)
   spawnMin: 18, // chỉ xuất hiện trong vòng từ 18 m ...
   spawnMax: 55, // ... đến 55 m quanh player
   despawn: 85, // đi xa hơn 85 m thì biến mất
@@ -69,15 +67,20 @@ const WILD = {
 };
 
 // --- Renderer / Scene ---------------------------------------------------
-const renderer = new THREE.WebGLRenderer({ antialias: ANTIALIAS, powerPreference: 'high-performance' });
-let pixelRatio = Math.min(MAX_PIXEL_RATIO, 1.5);
-renderer.setPixelRatio(pixelRatio);
+// stencil / alpha tắt: không dùng tới nên khỏi tốn bộ nhớ và công ghép lớp
+const renderer = new THREE.WebGLRenderer({
+  antialias: ANTIALIAS,
+  powerPreference: 'high-performance',
+  stencil: false,
+  alpha: false,
+});
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 const sky = new THREE.Color(0x9ec9ee);
 scene.background = sky;
+scene.fog = new THREE.Fog(sky, 100, 300); // khoảng cách thật được đặt theo mức chất lượng
 
 const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
 
@@ -137,13 +140,16 @@ async function start() {
   window.addEventListener('error', (e) => showError(e.message));
   window.addEventListener('unhandledrejection', (e) => showError(e.reason?.message ?? String(e.reason)));
 
-  const state = new GameState(); // đội mod + tiến độ nhiệm vụ + đang ở đảo nào (lưu trong localStorage)
+  const state = new GameState(); // đội mod, túi đồ, tiến độ nhiệm vụ, đảo hiện tại (lưu trong localStorage)
   if (!ISLANDS[state.islandIndex]) state.setIsland(0, true);
 
   const terrain = new TerrainGenerator(ISLANDS[state.islandIndex]);
-  const props = new PropScatter(terrain, CHUNK_SIZE); // danh sách model chỉnh trong props.js
+  const props = new PropScatter(terrain, CHUNK_SIZE); // danh sách model cây/đá/cỏ chỉnh trong propDefs.js
   const player = new Player(camera, renderer.domElement, terrain);
   scene.add(player.body);
+  const survival = new Survival(state); // thể lực + độ đói
+  survival.onMessage = (text) => ui.toast(text, 4000);
+  player.survival = survival;
   const library = new ModLibrary(MOD_DEFS);
 
   // Tải model TRƯỚC khi tạo chunk đầu tiên (chunk cần model để rải)
@@ -155,20 +161,15 @@ async function start() {
     library.load(),
   ]);
 
-  const chunks = new ChunkManager(
-    scene,
-    terrain,
-    { chunkSize: CHUNK_SIZE, resolution: CHUNK_RESOLUTION, viewRadius: VIEW_RADIUS },
-    props,
-  );
+  let tierIndex = savedTier;
+  let tier = TIERS[tierIndex];
+  // Chunk được dựng trong Web Worker; cây/đá/cỏ gộp thành vài InstancedMesh dùng chung (ít draw call)
+  const chunks = new ChunkManager(scene, terrain, props, { chunkSize: CHUNK_SIZE, ...chunkConfig(tier) });
 
-  // Sương mù che chỗ chunk mới "mọc" ở rìa tầm nhìn
-  scene.fog = new THREE.Fog(sky, chunks.viewDistance * FOG_NEAR, chunks.viewDistance * FOG_FAR);
-  camera.far = chunks.viewDistance * 1.2;
-  camera.updateProjectionMatrix();
-
+  // Mặt nước phủ được tầm nhìn xa nhất của mọi mức chất lượng
+  const maxView = Math.max(...TIERS.map((t) => t.viewRadius)) * CHUNK_SIZE;
   const water = createWater({
-    size: chunks.viewDistance * 3,
+    size: maxView * 3,
     tile: WATER_TILE,
     level: WATER_LEVEL,
     material: waterMat,
@@ -176,7 +177,8 @@ async function start() {
   });
   scene.add(water.mesh, water.floor);
 
-  // Biển sâu thì không đi tiếp được: muốn sang đảo khác phải hoàn thành nhiệm vụ đảo
+  // Va chạm: không đi xuyên cây, đá; không leo dốc quá đứng; không xuống biển sâu
+  player.resolve = (pos) => chunks.resolve(pos, PLAYER_RADIUS);
   player.walkable = (x, z) => terrain.height(x, z) > WATER_LEVEL - MAX_WADE_DEPTH;
   player.onBlocked = () => ui.toast('Biển quá sâu! Hoàn thành mọi nhiệm vụ của đảo để được dịch chuyển sang đảo khác.');
 
@@ -201,8 +203,34 @@ async function start() {
   const battle = new BattleSystem({ scene, camera, player, terrain, library, effects, ui, state, wild });
   const hasMod = () => !!state.lead((id) => library.def(id));
 
+  // --- Mức chất lượng + tự điều chỉnh -------------------------------------
+  let pixelRatio = 1;
+  let ratioMax = 1;
+  let ratioMin = 1;
+  let graceUntil = performance.now() + 10000; // bỏ qua FPS lúc mới vào (biên dịch shader, nạp chunk đầu)
+  function applyTier(i, opts = {}) {
+    tierIndex = Math.max(0, Math.min(TIERS.length - 1, i));
+    tier = TIERS[tierIndex];
+    ratioMax = Math.min(tier.pixelRatio, window.devicePixelRatio);
+    ratioMin = Math.max(0.7, ratioMax * 0.8);
+    pixelRatio = ratioMax;
+    renderer.setPixelRatio(pixelRatio);
+    chunks.configure(chunkConfig(tier)); // đổi cấu hình thì dựng lại chunk (tự động)
+    scene.fog.near = chunks.viewDistance * FOG_NEAR;
+    scene.fog.far = chunks.viewDistance * FOG_FAR;
+    camera.far = chunks.viewDistance * 1.2 + 50;
+    camera.updateProjectionMatrix();
+    water.setSimple(tier.simpleWater);
+    wild.cfg.max = tier.wildMax;
+    saveTierIndex(tierIndex);
+    graceUntil = performance.now() + 8000;
+    if (!opts.silent) ui.toast(`Chất lượng: ${tier.name}${opts.auto ? ' (tự hạ vì FPS thấp)' : ''}`, 3000);
+  }
+  applyTier(tierIndex, { silent: true });
+
+  // --- Đảo ---------------------------------------------------------------
   /** Nạp đảo `index`: dọn sạch đảo cũ (chunk, mod hoang dã, hải đăng) rồi dựng đảo mới quanh điểm xuất phát. */
-  function enterIsland(index) {
+  async function enterIsland(index) {
     const def = ISLANDS[index];
     const next = ISLANDS[(index + 1) % ISLANDS.length];
     terrain.setIsland(def); // đổi địa hình tại chỗ: player, chunks, props, wild... vẫn dùng chung đối tượng này
@@ -221,7 +249,7 @@ async function start() {
 
     const sp = findSpawn(terrain);
     player.teleport(sp.x, terrain.height(sp.x, sp.z), sp.z);
-    chunks.update(sp.x, sp.z, Infinity, 9); // build ngay vài chunk gần nhất; phần còn lại nạp dần
+    await chunks.waitInitial(sp.x, sp.z, camera, 9); // chờ vài chunk gần nhất (lúc này màn hình đang tối / đang tải)
   }
 
   let transitioning = false;
@@ -234,17 +262,22 @@ async function start() {
     const nextIndex = (state.islandIndex + 1) % ISLANDS.length;
     await ui.fade(true, 900, `Đang dịch chuyển tới ${ISLANDS[nextIndex].name}...`);
     state.setIsland(nextIndex, true);
-    enterIsland(nextIndex);
+    await enterIsland(nextIndex);
+    survival.stamina = 100; // sang đảo mới: hồi đầy thể lực
     await ui.fade(false, 900);
     ui.toast(`Chào mừng đến ${ISLANDS[nextIndex].name}!`, 4000);
     player.locked = false;
     transitioning = false;
+    graceUntil = performance.now() + 6000;
   }
 
   window.addEventListener('keydown', (e) => {
-    if (e.repeat || transitioning) return;
+    if (e.repeat) return;
+    if (e.code === 'BracketRight') return applyTier(tierIndex + 1); // tăng chất lượng
+    if (e.code === 'BracketLeft') return applyTier(tierIndex - 1); // giảm chất lượng
+    if (transitioning) return;
     if (battle.active) {
-      battle.onKey(e.code); // 1..9: dùng chiêu, F: bỏ chạy
+      battle.onKey(e.code); // trận đấu tự động; chỉ có F: rút lui
       return;
     }
     if (e.code === 'KeyJ') {
@@ -253,38 +286,52 @@ async function start() {
       else ui.toast('Không có mod hoang dã nào ở gần để thách đấu.');
     } else if (e.code === 'KeyQ') {
       ui.toggleQuests(quests.snapshot(library));
+    } else if (e.code === 'KeyE') {
+      ui.toast(survival.eat().message, 2000);
     }
   });
   window.addEventListener('beforeunload', () => state.save());
 
-  // Tiện cho việc thử nghiệm: mở console (F12), ví dụ game.giveMod('hoa_ti') hoặc game.nextIsland()
+  // Tiện cho việc thử nghiệm: mở console (F12), ví dụ game.giveMod('hoa_ti'), game.nextIsland(), game.setTier(0)
   window.game = {
     state,
     quests,
     battle,
     wild,
+    chunks,
+    survival,
+    player,
     giveMod: (id) => {
       state.addMod(id);
       ui.toast(`Đã nhận ${library.def(id)?.name ?? id}`);
     },
+    giveFood: (id, n = 3) => state.addFood(id, n),
     nextIsland: () => teleportNext(),
+    setTier: (i) => applyTier(i),
   };
 
-  enterIsland(state.islandIndex);
+  await enterIsland(state.islandIndex);
 
   // --- Loop -------------------------------------------------------------
   const clock = new THREE.Clock();
   let hudTimer = 0;
+  let vitalsTimer = 0;
   let fpsTime = 0;
   let fpsFrames = 0;
   let fps = 0;
+  let lowSecs = 0;
+  let highSecs = 0;
+  let jsMs = 0;
+  let renderMs = 0;
+  let frameMs = 16;
 
   renderer.setAnimationLoop(() => {
     const rawDt = clock.getDelta();
     const dt = Math.min(rawDt, 0.05);
+    const t0 = performance.now();
 
     player.update(dt);
-    chunks.update(player.position.x, player.position.z, 4); // ngân sách ~4ms build chunk / frame
+    chunks.update(player.position.x, player.position.z, camera);
     water.update(dt, player.position.x, player.position.z);
 
     effects.update(dt);
@@ -293,6 +340,17 @@ async function start() {
     quests.update(player, dt);
     battle.update(dt); // phải gọi SAU player.update vì nó điều chỉnh camera
     ui.update(dt, () => quests.snapshot(library));
+
+    // Nhặt thực phẩm khi đi tới gần
+    const picked = chunks.collectFood(player.position.x, player.position.y, player.position.z, PICKUP_RADIUS);
+    if (picked.length > 0) {
+      const counts = {};
+      for (const id of picked) counts[id] = (counts[id] ?? 0) + 1;
+      for (const [id, n] of Object.entries(counts)) {
+        state.addFood(id, n);
+        ui.toast(`+${n} ${FOOD_INFO[id].name}`, 1500);
+      }
+    }
 
     // Xong hết nhiệm vụ đảo -> đếm ngược rồi dịch chuyển (chờ nếu đang đấu)
     if (quests.islandComplete && !battle.active && !transitioning) {
@@ -317,45 +375,67 @@ async function start() {
     ui.prompt(
       near
         ? hasMod()
-          ? `[J] Thách đấu ${near.tag}`
+          ? `[J] Thách đấu ${near.tag} (trận đấu tự động)`
           : `${near.tag} — bạn chưa có mod. Nhấn Q để xem nhiệm vụ nhận mod tân thủ`
         : null,
     );
 
-    // Tự điều chỉnh độ phân giải theo FPS: tụt thì giảm (không dưới MIN), dư thì tăng lại
+    const t1 = performance.now();
+    renderer.render(scene, camera);
+    const t2 = performance.now();
+    jsMs += (t1 - t0 - jsMs) * 0.1;
+    renderMs += (t2 - t1 - renderMs) * 0.1;
+    frameMs += (rawDt * 1000 - frameMs) * 0.1;
+
+    // Tự điều chỉnh: FPS thấp kéo dài -> nếu nghẽn GPU thì giảm độ phân giải trước, hết cách thì hạ mức chất lượng.
     fpsTime += rawDt;
     fpsFrames++;
     if (fpsTime >= 1) {
       fps = fpsFrames / fpsTime;
       fpsTime = 0;
       fpsFrames = 0;
-      let next = pixelRatio;
-      if (fps < 40) next = Math.max(MIN_PIXEL_RATIO, pixelRatio - 0.2);
-      else if (fps > 58) next = Math.min(MAX_PIXEL_RATIO, pixelRatio + 0.1);
-      if (next !== pixelRatio) {
-        pixelRatio = next;
-        renderer.setPixelRatio(pixelRatio);
+      if (performance.now() > graceUntil && !transitioning) {
+        lowSecs = fps < 38 ? lowSecs + 1 : Math.max(0, lowSecs - 1);
+        highSecs = fps > 57 ? highSecs + 1 : 0;
+        if (lowSecs >= 4) {
+          lowSecs = 0;
+          const cpuBound = jsMs + renderMs > frameMs * 0.7; // CPU bận suốt khung hình => đổi độ phân giải không giúp được
+          if (!cpuBound && pixelRatio > ratioMin + 0.01) {
+            pixelRatio = Math.max(ratioMin, pixelRatio - 0.15);
+            renderer.setPixelRatio(pixelRatio);
+          } else if (tierIndex > 0) {
+            applyTier(tierIndex - 1, { auto: true });
+          }
+        } else if (highSecs >= 6 && pixelRatio < ratioMax - 0.01) {
+          pixelRatio = Math.min(ratioMax, pixelRatio + 0.05);
+          renderer.setPixelRatio(pixelRatio);
+        }
       }
     }
 
+    vitalsTimer += dt;
+    if (vitalsTimer > 0.1) {
+      vitalsTimer = 0;
+      ui.updateVitals(survival, state.inv, FOOD_INFO);
+    }
+
     hudTimer += dt;
-    if (hudTimer > 0.2) {
+    if (hudTimer > 0.25) {
       hudTimer = 0;
       const p = player.position;
       const info = renderer.info.render;
       const beacon = landmarks.nearestUnvisited(p);
       const def = ISLANDS[state.islandIndex];
+      const bound = frameMs > (jsMs + renderMs) * 1.5 + 3 ? 'GPU / vsync' : 'CPU';
       hud.textContent =
-        `Click: khoá chuột | WASD: di chuyển | Shift: chạy | Space: nhảy | V: đổi góc nhìn\n` +
-        `J: thách đấu mod | Q: nhiệm vụ & mod của bạn | 1-9: chiêu, F: bỏ chạy (khi đang đấu)\n` +
-        `${def.name} | hải đăng gần nhất: ${beacon ? `${arrowTo(player, beacon.x, beacon.z)} ${beacon.dist.toFixed(0)} m` : 'đã thắp hết'} | ` +
+        `Click: khoá chuột | WASD | Shift: chạy (tốn thể lực + đói) | Space: nhảy | V: góc nhìn | E: ăn\n` +
+        `J: thách đấu (trận tự động) | Q: nhiệm vụ & mod | F: rút lui khi đang đấu | [ ]: chất lượng\n` +
+        `${def.name} | hải đăng: ${beacon ? `${arrowTo(player, beacon.x, beacon.z)} ${beacon.dist.toFixed(0)} m` : 'đã thắp hết'} | ` +
         `mod hoang dã: ${wild.list.length} | trận đấu: ${battle.phase}\n` +
-        `FPS: ${fps.toFixed(0)} | draw calls: ${info.calls} | tam giác: ${(info.triangles / 1000).toFixed(0)}k | ` +
-        `độ phân giải: x${pixelRatio.toFixed(2)} | chunk: ${chunks.loadedCount} (chờ: ${chunks.queue.length})\n` +
-        `XYZ: ${p.x.toFixed(0)}, ${p.y.toFixed(0)}, ${p.z.toFixed(0)}`;
+        `Chất lượng: ${tier.name} | FPS ${fps.toFixed(0)} | khung ${frameMs.toFixed(1)} ms (JS ${jsMs.toFixed(1)} + render ${renderMs.toFixed(1)}) | nghẽn: ${bound}\n` +
+        `draw calls ${info.calls} | tam giác ${(info.triangles / 1000).toFixed(0)}k | phân giải x${pixelRatio.toFixed(2)} | ` +
+        `chunk ${chunks.loadedCount} (chờ ${chunks.pendingCount}${chunks.worker ? '' : ', không có Worker!'}) | XYZ ${p.x.toFixed(0)}, ${p.y.toFixed(0)}, ${p.z.toFixed(0)}`;
     }
-
-    renderer.render(scene, camera);
   });
 }
 

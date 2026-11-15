@@ -4,17 +4,19 @@ import { SEA_FLOOR, SEABED_COLOR } from './terrain';
 
 const TAU = Math.PI * 2;
 
+// Các sóng (fx, fy là SỐ NGUYÊN) -> normal map lặp khít khi ghép ô, không thấy đường nối
 const WAVES = [
   [1, 0], [0, 1], [2, 1], [1, 2], [3, 2], [2, 3],
   [5, 3], [3, 5], [7, 4], [4, 7], [-2, 3], [3, -4],
 ];
 
+/** Sinh dữ liệu normal map nước (thuần tính toán, không cần file ảnh). */
 export function buildNormalData(size = 256, strength = 0.025) {
   const rand = mulberry32(777);
   const waves = WAVES.map(([fx, fy]) => ({
     fx,
     fy,
-    a: 1 / Math.hypot(fx, fy),
+    a: 1 / Math.hypot(fx, fy), // sóng nhỏ thì biên độ nhỏ
     ph: rand() * TAU,
   }));
   const data = new Uint8ClampedArray(size * size * 4);
@@ -52,7 +54,7 @@ function makeProceduralNormalMap(size = 256) {
   const ctx = canvas.getContext('2d');
   ctx.putImageData(new ImageData(buildNormalData(size), size, size), 0, 0);
   const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.NoColorSpace;
+  tex.colorSpace = THREE.NoColorSpace; // normal map không phải màu
   return tex;
 }
 
@@ -79,6 +81,10 @@ function tileTextures(material, repeat) {
   }
 }
 
+/**
+ * Mặt nước = 1 tấm phẳng khổng lồ đi theo player (KHÔNG cần model nước).
+ * Ưu tiên: material từ GLB (nếu có) > normal map tải về > normal map tự sinh.
+ */
 export function createWater({ size, tile = 12, level = 0, material = null, normalMap = null }) {
   const repeat = size / tile;
   let mat = material;
@@ -94,9 +100,14 @@ export function createWater({ size, tile = 12, level = 0, material = null, norma
     });
   }
   tileTextures(mat, repeat);
+  // Nước "đơn giản" cho mức chất lượng thấp: đặc, không trong suốt, không normal map => ít tốn GPU nhất
+  const matSimple = new THREE.MeshLambertMaterial({ color: 0x2a7fb8 });
+  let current = mat;
 
   const mesh = new THREE.Mesh(new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2), mat);
 
+  // Đáy biển: 1 tấm phẳng duy nhất thay cho mọi chunk ngoài khơi (rẻ hơn rất nhiều).
+  // Thấp hơn SEA_FLOOR 0.5m để không bị "đánh nhau" (z-fighting) với chunk đáy biển thật.
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(size, size).rotateX(-Math.PI / 2),
     new THREE.MeshLambertMaterial({ color: SEABED_COLOR }),
@@ -105,12 +116,17 @@ export function createWater({ size, tile = 12, level = 0, material = null, norma
   return {
     mesh,
     floor,
+    setSimple(on) {
+      current = on ? matSimple : mat;
+      mesh.material = current;
+    },
     update(dt, px, pz) {
+      // Dịch từng bước đúng bằng 1 ô texture => texture đứng yên theo thế giới, không "trượt"
       mesh.position.set(Math.round(px / tile) * tile, level, Math.round(pz / tile) * tile);
       floor.position.set(px, SEA_FLOOR - 0.5, pz);
-      const tex = mat.normalMap ?? mat.map;
+      const tex = current === mat ? (mat.normalMap ?? mat.map) : null;
       if (tex) {
-        tex.offset.x = (tex.offset.x + dt * 0.02) % 1;
+        tex.offset.x = (tex.offset.x + dt * 0.02) % 1; // nước chảy nhẹ
         tex.offset.y = (tex.offset.y + dt * 0.012) % 1;
       }
     },

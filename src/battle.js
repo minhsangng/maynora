@@ -1,14 +1,18 @@
 import * as THREE from 'three';
 
-const ARENA_GAP = 9; // khoảng cách giữa 2 mod (mét) = "không gian chiến đấu"
+const ARENA_GAP = 10; // khoảng cách giữa 2 mod lúc đứng chờ (mét) = "không gian chiến đấu"
 const PLAYER_TO_MOD = 2.5; // mod của bạn đứng cách player bao xa
-const CAM_SIDE = 12; // camera dịch sang bên bao xa
+const CAM_SIDE = 13; // camera dịch sang bên bao xa
 const CAM_UP = 5.5; // ... và lên cao bao nhiêu
 const CAM_LOOK_UP = 1.2;
 const CAM_BLEND = 0.9; // giây chuyển camera vào / ra trận đấu
 const SUMMON_AT = 0.55; // mod xuất hiện ở % nào của clip triệu hồi
 const SUMMON_FALLBACK = 1.4; // giây chờ nếu model không có clip triệu hồi
 const MAX_LEVEL = 30;
+const RUN_SPEED = 9; // m/s: mod lao tới đối thủ
+const BACK_SPEED = 6; // m/s: mod quay về chỗ cũ
+const STRIKE_GAP = 1.9; // dừng cách đối thủ bao xa để ra đòn
+const MAX_ROUNDS = 30; // quá số hiệp này thì hoà (trận thường chỉ 4-10 hiệp)
 
 const UP = new THREE.Vector3(0, 1, 0);
 const ease = (t) => t * t * (3 - 2 * t);
@@ -21,11 +25,30 @@ export function calcDamage(att, tgt, move, rng = Math.random) {
 }
 
 /**
- * Thách đấu theo lượt:
- *  intro  -> player làm animation triệu hồi, camera dịch sang bên, mod xuất hiện
- *  choose -> chọn chiêu (phím 1..9) hoặc bỏ chạy (F)
- *  turn   -> 2 bên lần lượt ra đòn (bên nhanh hơn đi trước)
- *  outro  -> thu mod về, camera quay lại
+ * AI chọn chiêu: chọn ngẫu nhiên có trọng số theo (sát thương kỳ vọng)². Chiêu mạnh được chọn nhiều nhất,
+ * nhưng các chiêu khác vẫn thỉnh thoảng được dùng nên trận đấu và animation đa dạng. Đòn có thể kết liễu thì được ưu tiên hơn.
+ */
+export function chooseMove(att, tgt, rng = Math.random) {
+  const moves = att.def.moves;
+  const weights = moves.map((m) => {
+    const expected = calcDamage(att, tgt, m, () => 0.5) * ((m.accuracy ?? 100) / 100);
+    const w = expected * (expected >= tgt.hp ? 1.5 : 1);
+    return w * w;
+  });
+  let r = rng() * weights.reduce((a, b) => a + b, 0);
+  for (let i = 0; i < moves.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return moves[i];
+  }
+  return moves[moves.length - 1];
+}
+
+/**
+ * Thách đấu TỰ ĐỘNG (người chơi không điều khiển mod):
+ *  intro -> player làm animation triệu hồi, camera dịch sang bên, mod xuất hiện
+ *  fight -> mỗi hiệp 2 mod lần lượt (bên nhanh hơn đi trước): tự chọn chiêu, chạy tới, ra đòn bằng animation
+ *           của chiêu, quay về chỗ. Lặp đến khi 1 bên gục. Nhấn F để rút lui.
+ *  outro -> thu mod về, camera quay lại
  */
 export class BattleSystem {
   constructor({ scene, camera, player, terrain, library, effects, ui, state, wild }) {
@@ -44,6 +67,7 @@ export class BattleSystem {
     this.phaseTime = 0;
     this.time = 0;
     this.queue = [];
+    this.tweens = [];
     this.camOn = false;
     this.camW = 0;
     this.camPos = new THREE.Vector3();
@@ -53,7 +77,8 @@ export class BattleSystem {
     this.mine = null;
     this.foe = null;
     this.entry = null;
-    this.foeMove = null;
+    this.round = 0;
+    this.fleeRequested = false;
   }
 
   get active() {
@@ -62,6 +87,11 @@ export class BattleSystem {
 
   later(delay, fn) {
     this.queue.push({ at: this.time + delay, fn });
+  }
+
+  /** Di chuyển mod tới `to` trong `dur` giây (bám địa hình), xong gọi onDone. */
+  tween(actor, to, dur, onDone) {
+    this.tweens.push({ actor, from: actor.group.position.clone(), to: to.clone(), t: 0, dur, onDone });
   }
 
   start(foe) {
@@ -82,8 +112,9 @@ export class BattleSystem {
     this.phase = 'intro';
     this.entry = entry;
     this.foe = foe;
+    this.round = 0;
+    this.fleeRequested = false;
     foe.engaged = true;
-    foe.moving = false;
 
     // Hình học khu đấu: player -> A (mod bạn) -> B (mod hoang dã) nằm trên 1 đường thẳng
     const P = this.player.position;
@@ -114,11 +145,18 @@ export class BattleSystem {
     this.later(clip > 0 ? clip * SUMMON_AT : SUMMON_FALLBACK * 0.5, () => this.summonMod());
     this.later(total + 0.2, () => {
       this.player.endOnce();
-      this.enterChoose();
+      this.enterFight();
     });
 
-    // Mod hoang dã chạy về vị trí đấu, quay mặt vào đối thủ
-    this.foeMove = { from: foe.group.position.clone(), t: 0, dur: 1.0 };
+    // Mod hoang dã chạy về vị trí đấu, rồi quay mặt vào đối thủ
+    foe.moving = true;
+    foe.running = true;
+    foe.faceDir(this.B.x - foe.group.position.x, this.B.z - foe.group.position.z);
+    this.tween(foe, this.B, 1.0, () => {
+      foe.moving = false;
+      foe.running = false;
+      foe.faceDir(this.A.x - this.B.x, this.A.z - this.B.z);
+    });
     this.ui.battleShow();
     this.ui.say(`Bạn thách đấu ${foe.tag}!`);
   }
@@ -128,6 +166,7 @@ export class BattleSystem {
     console.error('[battle]', err);
     this.ui.toast(`Lỗi trận đấu: ${err?.message ?? err}`, 8000);
     this.queue = [];
+    this.tweens = [];
     this.ui.battleHide();
     if (this.mine) {
       this.mine.vanish(0.3);
@@ -136,10 +175,10 @@ export class BattleSystem {
     if (this.foe && !this.foe.fainted) {
       this.foe.engaged = false;
       this.foe.moving = false;
+      this.foe.running = false;
     }
     this.mine = null;
     this.foe = null;
-    this.foeMove = null;
     this.camOn = false;
     this.player.endOnce();
     this.player.locked = false;
@@ -151,13 +190,13 @@ export class BattleSystem {
   /** Bộ giám sát: 1 pha kéo dài bất thường thì tự cứu. */
   watchdog() {
     if (this.phase === 'intro' && this.phaseTime > 12) {
-      console.warn('[battle] pha intro quá lâu -> ép sang chọn chiêu');
+      console.warn('[battle] pha intro quá lâu -> ép vào trận');
       if (this.mine) {
         this.player.endOnce();
-        this.enterChoose();
+        this.enterFight();
       } else this.abort(new Error('không triệu hồi được mod'));
-    } else if (this.phase === 'turn' && this.phaseTime > 25) {
-      this.abort(new Error('lượt đấu bị treo'));
+    } else if (this.phase === 'fight' && this.phaseTime > 420) {
+      this.abort(new Error('trận đấu kéo dài bất thường'));
     } else if (this.phase === 'outro' && this.phaseTime > 4) {
       this.abort(new Error('kết thúc trận bị treo'));
     }
@@ -174,64 +213,95 @@ export class BattleSystem {
     this.ui.say(`${this.mine.name}, ra đây!`);
   }
 
-  enterChoose() {
+  enterFight() {
     if (this.phase !== 'intro') return;
-    this.phase = 'choose';
-    this.ui.battleMoves(this.mine.def.moves);
-    this.ui.say(`Chọn chiêu cho ${this.mine.name}!`);
+    this.phase = 'fight';
+    this.ui.battleHint('Trận đấu tự động — nhấn F để rút lui');
+    this.ui.say(`${this.mine.name} đối đầu ${this.foe.name}!`);
+    this.later(0.7, () => this.nextRound());
   }
 
   onKey(code) {
-    if (this.phase !== 'choose') return;
-    const moves = this.mine.def.moves;
-    const m = /^(?:Digit|Numpad)([1-9])$/.exec(code);
-    if (m && Number(m[1]) <= moves.length) this.useMove(Number(m[1]) - 1);
-    else if (code === 'KeyF') this.flee();
+    if (code === 'KeyF' && this.phase === 'fight' && !this.fleeRequested) {
+      this.fleeRequested = true;
+      this.ui.say('Bạn ra lệnh rút lui...');
+    }
   }
 
-  useMove(i) {
-    this.phase = 'turn';
-    this.ui.battleHideMoves();
+  nextRound() {
+    if (this.phase !== 'fight') return;
     const { mine, foe } = this;
-    const mMove = mine.def.moves[i];
-    const fMove = foe.def.moves[Math.floor(Math.random() * foe.def.moves.length)];
-    const order =
-      mine.stats.spd >= foe.stats.spd
-        ? [[mine, foe, mMove], [foe, mine, fMove]]
-        : [[foe, mine, fMove], [mine, foe, mMove]];
+    if (mine.hp <= 0 || foe.hp <= 0) return this.endFight();
+    if (this.fleeRequested) return this.flee();
+    if (++this.round > MAX_ROUNDS) return this.draw();
+    const order = mine.stats.spd >= foe.stats.spd ? [mine, foe] : [foe, mine]; // bên nhanh hơn đánh trước
     this.step(order, 0);
   }
 
   step(order, idx) {
-    if (idx >= order.length) return this.afterTurn();
-    const [att, tgt, move] = order[idx];
-    if (att.hp <= 0 || tgt.hp <= 0) return this.afterTurn(); // 1 bên đã gục giữa lượt
+    if (this.phase !== 'fight') return;
+    if (idx >= order.length) {
+      this.later(0.4, () => this.nextRound());
+      return;
+    }
+    const att = order[idx];
+    const tgt = att === this.mine ? this.foe : this.mine;
+    if (att.hp <= 0 || tgt.hp <= 0) return this.nextRound();
+    const move = chooseMove(att, tgt);
     this.ui.say(`${att.name} dùng ${move.name}!`);
-    const dx = tgt.group.position.x - att.group.position.x;
-    const dz = tgt.group.position.z - att.group.position.z;
-    att.faceDir(dx, dz);
-    att.attack(Math.max(0, Math.hypot(dx, dz) - 1.8)); // lao tới sát đối thủ rồi lùi lại
-    this.later(0.35, () => {
-      if (Math.random() * 100 >= (move.accuracy ?? 100)) {
-        this.ui.say(`${att.name} đánh trượt!`);
-        return;
-      }
-      const dmg = calcDamage(att, tgt, move);
-      tgt.takeDamage(dmg);
-      tgt.hit();
-      this.ui.say(`${tgt.name} mất ${dmg} HP!`);
-    });
-    this.later(1.3, () => this.step(order, idx + 1));
+    this.strike(att, tgt, move, () => this.step(order, idx + 1));
   }
 
-  afterTurn() {
-    if (this.foe.hp <= 0) this.victory();
-    else if (this.mine.hp <= 0) this.defeat();
-    else {
-      this.phase = 'choose';
-      this.ui.battleMoves(this.mine.def.moves);
-      this.ui.say(`Chọn chiêu cho ${this.mine.name}!`);
+  /** Chạy tới sát đối thủ -> ra đòn bằng animation của chiêu -> đòn trúng -> quay về chỗ cũ. */
+  strike(att, tgt, move, done) {
+    const home = att === this.mine ? this.A : this.B;
+    const from = att.group.position;
+    const dx = tgt.group.position.x - from.x;
+    const dz = tgt.group.position.z - from.z;
+    const dist = Math.hypot(dx, dz) || 1;
+    const stop = tgt.group.position.clone();
+    stop.x -= (dx / dist) * STRIKE_GAP;
+    stop.z -= (dz / dist) * STRIKE_GAP;
+
+    att.faceDir(dx, dz);
+    att.moving = true;
+    att.running = true;
+    this.tween(att, stop, Math.max(0.25, Math.max(0, dist - STRIKE_GAP) / RUN_SPEED), () => {
+      att.moving = false;
+      att.running = false;
+      att.faceDir(tgt.group.position.x - att.group.position.x, tgt.group.position.z - att.group.position.z);
+      const dur = Math.min(att.attack(move.anim), 3);
+      this.later(Math.min(dur * (move.impact ?? 0.45), 1.5), () => this.resolveHit(att, tgt, move));
+      this.later(dur + 0.2, () => {
+        att.moving = true;
+        att.faceDir(home.x - att.group.position.x, home.z - att.group.position.z);
+        const back = Math.max(0.25, att.group.position.distanceTo(home) / BACK_SPEED);
+        this.tween(att, home, back, () => {
+          att.moving = false;
+          const o = att === this.mine ? this.B : this.A;
+          att.faceDir(o.x - home.x, o.z - home.z);
+          done();
+        });
+      });
+    });
+  }
+
+  resolveHit(att, tgt, move) {
+    if (this.phase !== 'fight' || tgt.hp <= 0) return;
+    if (Math.random() * 100 >= (move.accuracy ?? 100)) {
+      this.ui.say(`${att.name} đánh trượt!`);
+      return;
     }
+    const dmg = calcDamage(att, tgt, move);
+    tgt.takeDamage(dmg);
+    tgt.hit();
+    this.ui.say(`${tgt.name} mất ${dmg} HP!`);
+    if (tgt.hp <= 0) tgt.faint(); // gục ngay tại chỗ
+  }
+
+  endFight() {
+    if (this.foe.hp <= 0) this.victory();
+    else this.defeat();
   }
 
   victory() {
@@ -239,25 +309,34 @@ export class BattleSystem {
     foe.faint();
     this.wild.release(foe); // không còn là mod hoang dã; Effects dọn khi đã mờ hẳn
     this.effects.adopt(foe);
-    this.ui.say(`${foe.name} đã gục. Bạn thắng!`);
+    const d = mine.win();
+    this.ui.say(`${foe.name} đã gục. ${mine.name} chiến thắng!`);
     if (entry.level < MAX_LEVEL) {
       entry.level += 1;
       this.ui.toast(`${mine.name} lên Lv ${entry.level}!`);
     }
+    this.state.addFood?.('meat', 1); // phần thưởng: thực phẩm
+    this.ui.toast('Nhận 1 Thịt (nhấn E để ăn)', 3000);
     this.state.recordWin();
     this.state.save();
-    this.later(1.8, () => this.finish());
+    this.later(Math.max(2, d + 0.5), () => this.finish());
   }
 
   defeat() {
-    this.mine.faint();
-    this.ui.say(`${this.mine.name} đã gục... Bạn thua trận này.`);
-    this.later(1.8, () => this.finish());
+    const { foe, mine } = this;
+    mine.faint();
+    foe.win();
+    this.ui.say(`${mine.name} đã gục... Bạn thua trận này.`);
+    this.later(2.2, () => this.finish());
+  }
+
+  draw() {
+    this.ui.say('Hai bên đều kiệt sức — hoà!');
+    this.later(1.5, () => this.finish());
   }
 
   flee() {
-    this.phase = 'turn';
-    this.ui.battleHideMoves();
+    this.phase = 'outro';
     this.ui.say('Bạn rút lui!');
     this.later(0.6, () => this.finish());
   }
@@ -265,21 +344,23 @@ export class BattleSystem {
   finish() {
     this.phase = 'outro';
     this.camOn = false;
+    this.tweens = [];
     this.ui.battleHide();
     if (this.mine) {
       if (!this.mine.fainted) {
         this.effects.ring(this.mine.group.position, this.mine.def.color ?? 0xffffff, 2.2);
         this.mine.vanish(0.4);
       }
+      this.mine.moving = false;
       this.effects.adopt(this.mine); // tự dọn khi đã biến mất / mờ hẳn
     }
     if (this.foe && !this.foe.fainted) {
       this.foe.engaged = false;
       this.foe.moving = false;
+      this.foe.running = false;
     }
     this.mine = null;
     this.foe = null;
-    this.foeMove = null;
     this.later(CAM_BLEND, () => {
       this.phase = 'none';
       this.player.locked = false;
@@ -299,29 +380,33 @@ export class BattleSystem {
     }
     if (this.active) this.watchdog(); // kiểm tra TRƯỚC khi chạy callback (lúc đó phase và phaseTime còn khớp nhau)
 
-    if (this.queue.length > 0) {
-      const due = this.queue.filter((q) => q.at <= this.time);
-      if (due.length > 0) {
-        this.queue = this.queue.filter((q) => q.at > this.time);
-        try {
+    try {
+      if (this.queue.length > 0) {
+        const due = this.queue.filter((q) => q.at <= this.time);
+        if (due.length > 0) {
+          this.queue = this.queue.filter((q) => q.at > this.time);
           due.sort((a, b) => a.at - b.at).forEach((q) => q.fn());
-        } catch (err) {
-          this.abort(err);
         }
       }
-    }
 
-    if (this.foeMove && this.foe) {
-      const m = this.foeMove;
-      m.t += dt;
-      const u = ease(Math.min(1, m.t / m.dur));
-      const p = this.foe.group.position;
-      p.x = m.from.x + (this.B.x - m.from.x) * u;
-      p.z = m.from.z + (this.B.z - m.from.z) * u;
-      p.y = this.terrain.height(p.x, p.z);
-      this.foe.moving = u < 1;
-      this.foe.faceDir(this.A.x - p.x, this.A.z - p.z);
-      if (u >= 1) this.foeMove = null;
+      if (this.tweens.length > 0) {
+        const finished = [];
+        for (const tw of this.tweens) {
+          tw.t += dt;
+          const u = ease(Math.min(1, tw.t / tw.dur));
+          const p = tw.actor.group.position;
+          p.x = tw.from.x + (tw.to.x - tw.from.x) * u;
+          p.z = tw.from.z + (tw.to.z - tw.from.z) * u;
+          p.y = this.terrain.height(p.x, p.z);
+          if (tw.t >= tw.dur) finished.push(tw);
+        }
+        if (finished.length > 0) {
+          this.tweens = this.tweens.filter((tw) => !finished.includes(tw));
+          finished.forEach((tw) => tw.onDone?.());
+        }
+      }
+    } catch (err) {
+      this.abort(err);
     }
 
     this.mine?.update(dt);

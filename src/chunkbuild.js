@@ -115,7 +115,7 @@ function setMatrix(te, o, px, py, pz, x, y, z, w, sx, sy, sz) {
   te[o + 15] = 1;
 }
 
-function placeProps(gen, cfg, propInfo, cx, cz, grid) {
+function placeProps(gen, cfg, propInfo, cx, cz, grid, colliders) {
   const S = cfg.chunkSize;
   const ox = cx * S;
   const oz = cz * S;
@@ -193,6 +193,13 @@ function placeProps(gen, cfg, propInfo, cx, cz, grid) {
         s * (1 + (rj1 * 2 - 1) * jitter), s, s * (1 + (rj2 * 2 - 1) * jitter),
       );
       b.n++;
+
+      if (def.collider) {
+        // va chạm hình tròn trên mặt phẳng ngang: x, z, bán kính
+        const c = def.collider;
+        const r = (c.bbox ? (info.halfW?.[vi] ?? 0.3) * (c.scale ?? 0.85) : c.ratio) * s;
+        colliders.push(wx, wz, Math.min(6, Math.max(0.15, r)));
+      }
     }
 
     for (const b of buckets.values()) {
@@ -239,7 +246,8 @@ function placeFood(gen, cfg, cx, cz, grid) {
 
 /**
  * cfg: { chunkSize, resolution, propScale, grassScale, foodScale, bake }
- * propInfo: [{ defIndex, salt, vCum, sCum }] - các loại prop đã tải được model (do luồng chính gửi sang)
+ * propInfo: [{ defIndex, salt, vCum, sCum, halfW }] - các loại prop đã tải được model (do luồng chính gửi sang);
+ *            halfW[vi] = nửa bề ngang / chiều cao của model variant vi (để tính bán kính va chạm)
  */
 export function buildChunk(gen, cfg, propInfo, cx, cz) {
   const S = cfg.chunkSize;
@@ -297,6 +305,8 @@ export function buildChunk(gen, cfg, propInfo, cx, cz) {
   }
 
   const grid = { hs, stride, step };
+  const colliders = [];
+  const props = placeProps(gen, cfg, propInfo, cx, cz, grid, colliders);
   return {
     cx,
     cz,
@@ -305,14 +315,15 @@ export function buildChunk(gen, cfg, propInfo, cx, cz) {
     col,
     minY,
     maxY,
-    props: placeProps(gen, cfg, propInfo, cx, cz, grid),
+    props,
     food: placeFood(gen, cfg, cx, cz, grid),
+    colliders: new Float32Array(colliders), // [x, z, r, x, z, r, ...] theo toạ độ thế giới
   };
 }
 
 /** Danh sách buffer để chuyển (transfer) sang luồng chính không tốn thời gian sao chép. */
 export function transferList(r) {
-  const t = [r.pos.buffer, r.nor.buffer, r.col.buffer];
+  const t = [r.pos.buffer, r.nor.buffer, r.col.buffer, r.colliders.buffer];
   for (const p of r.props) t.push(p.data.buffer);
   for (const f of r.food) t.push(f.data.buffer, f.pos.buffer);
   return t;

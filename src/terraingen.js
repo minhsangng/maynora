@@ -1,80 +1,114 @@
-import { WATER_LEVEL } from './terraingen';
+import { SimplexNoise } from './noise';
+
+export const WATER_LEVEL = 0;
+export const SEA_FLOOR = -8; // đáy biển phẳng: mọi thứ thấp hơn bị ép lên mức này
+export const SEABED_COLOR = 0x1d5f8a;
+
+const TAU = Math.PI * 2;
+const COAST_STEPS = 720;
+
+const smoothstep = (a, b, x) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
 
 /**
- * Mỗi phần tử = 1 loại vật thể rải trên map (cây, đá, cỏ...).
- *
- *  name        tên (làm "salt" cho random -> thêm/bớt loại khác không làm đổi vị trí loại này)
- *  variants    các model GLB khác nhau của loại này (đa dạng hình dáng).
- *              { url, weight }: weight càng lớn càng hay xuất hiện.
- *  sizes       các LỚP KÍCH THƯỚC: { height: [min, max] (mét), weight, drawChunks? }
- *              Model tự được chuẩn hoá về cao 1m rồi scale theo `height` ở đây, nên model gốc to nhỏ
- *              thế nào cũng được. drawChunks riêng cho từng lớp: vật nhỏ chỉ vẽ gần, vật to vẽ xa hơn.
- *  jitter      độ méo ngẫu nhiên theo chiều ngang (0.15 = ±15%) để 2 vật cùng loại không giống hệt nhau
- *  perChunk    số lần "thử đặt" trong mỗi chunk (số thực tế ít hơn vì bị lọc theo luật bên dưới)
- *  minHeight / maxHeight   khoảng độ cao cho phép
- *  maxSlope    độ dốc tối đa (|dh/dx| + |dh/dz|). 0.3 = gần phẳng, 1.2 = khá dốc
- *  density     (gen, x, z) => boolean, ví dụ chỉ mọc ở vùng rừng
- *  alignToGround  nghiêng theo mặt đất (hợp với đá)
- *  sink        chôn xuống đất bao nhiêu % chiều cao (0.1 = 10%)
- *  drawChunks  bán kính (chunk) vẽ mặc định nếu lớp kích thước không khai báo riêng
- *  doubleSide  vẽ 2 mặt (cỏ / lá dạng tấm phẳng)
- *  groundCover  đánh dấu cỏ/hoa: mức chất lượng thấp sẽ giảm hoặc tắt hẳn loại này
- *  cutout      ngưỡng alphaTest (vd 0.5) cho cỏ/lá có texture trong suốt
- *
- * Lưu ý hiệu năng: số draw call/chunk = (số variant) x (số mức drawChunks khác nhau) x (số mesh trong model).
- * Chỉ có 1-2 file model thì cứ để 1-2 variant, file nào không tồn tại sẽ tự bị bỏ qua.
+ * Địa hình của MỘT đảo, tâm ở (0, 0), xung quanh là biển.
+ * Mọi thứ (mesh, cây, va chạm) đều suy ra từ các hàm THUẦN TÚY này:
+ * cùng (x, z) + cùng đảo => luôn cùng kết quả, nên đảo luôn đồng nhất dù load/unload bao nhiêu lần.
+ * Đổi sang đảo khác bằng setIsland() - đối tượng này giữ nguyên nên mọi nơi đang tham chiếu vẫn dùng được.
  */
-export const PROP_DEFS = [
-  {
-    name: 'tree',
-    variants: [
-      { url: '/models/tree.glb', weight: 4 },
-      { url: '/models/tree.glb', weight: 3 },
-      { url: '/models/tree.glb', weight: 2 },
-    ],
-    sizes: [
-      { height: [3, 5], weight: 3, drawChunks: 2.5 }, // cây nhỏ / cây non
-      { height: [6, 9], weight: 5, drawChunks: 3.5 }, // cây vừa
-      { height: [10, 15], weight: 2, drawChunks: 5 }, // cây cao
-    ],
-    jitter: 0.12,
-    perChunk: 80,
-    minHeight: WATER_LEVEL + 2,
-    maxHeight: 42,
-    maxSlope: 1.2,
-    density: (gen, x, z) => gen.forest(x, z) > gen.forestThreshold, // ngưỡng rừng riêng của từng đảo
-  },
-  {
-    name: 'rock',
-    variants: [
-      { url: '/models/rock.glb', weight: 4 },
-      { url: '/models/rock.glb', weight: 3 },
-      { url: '/models/rock.glb', weight: 2 },
-    ],
-    sizes: [
-      { height: [0.3, 0.8], weight: 6, drawChunks: 2 }, // đá nhỏ
-      { height: [1, 2], weight: 3, drawChunks: 3 }, // đá vừa
-      { height: [3, 6], weight: 1, drawChunks: 5 }, // tảng đá lớn
-    ],
-    jitter: 0.2,
-    perChunk: 24,
-    minHeight: WATER_LEVEL - 1,
-    maxHeight: 200,
-    maxSlope: Infinity,
-    alignToGround: true,
-    sink: 0.12,
-  },
-  {
-    name: 'grass',
-    variants: [{ url: '/models/grass.glb', weight: 1 }],
-    sizes: [{ height: [0.5, 0.9], weight: 1, drawChunks: 1.5 }],
-    jitter: 0.2,
-    perChunk: 400,
-    minHeight: WATER_LEVEL + 1,
-    maxHeight: 30,
-    maxSlope: 0.8,
-    doubleSide: true,
-    cutout: 0.5,
-    groundCover: true, // lớp phủ mặt đất: số lượng theo tuỳ chọn cỏ của mức chất lượng
-  },
-];
+export class TerrainGenerator {
+  seed;
+  radius;
+  relief;
+  forestThreshold;
+  maxRadius;
+
+  constructor(island = {}) {
+    this.setIsland(typeof island === 'number' ? { seed: island } : island);
+  }
+
+  setIsland(def = {}) {
+    this.seed = def.seed ?? 12345;
+    this.radius = def.radius ?? 600; // bán kính "danh nghĩa" của đảo (mét)
+    this.relief = def.relief ?? 1; // độ gồ ghề: đồi núi cao thấp
+    this.forestThreshold = def.forestThreshold ?? 0.05; // thấp hơn = nhiều rừng hơn
+    this.shape = new SimplexNoise(this.seed);
+    this.forestNoise = new SimplexNoise(this.seed + 1337);
+
+    // Bảng bán kính bờ biển theo góc => đường bờ lồi lõm tự nhiên (không phải hình tròn)
+    const coastNoise = new SimplexNoise(this.seed + 4242);
+    this.coast = new Float32Array(COAST_STEPS + 1);
+    let maxR = 0;
+    for (let i = 0; i <= COAST_STEPS; i++) {
+      const a = (i / COAST_STEPS) * TAU;
+      const cx = Math.cos(a);
+      const cz = Math.sin(a);
+      const n = coastNoise.noise2D(cx * 1.3 + 7, cz * 1.3 + 3) + 0.5 * coastNoise.noise2D(cx * 2.7 - 5, cz * 2.7 + 11);
+      const r = this.radius * (1 + 0.28 * (n / 1.5));
+      this.coast[i] = r;
+      if (r > maxR) maxR = r;
+    }
+    this.maxRadius = maxR;
+  }
+
+  fbm(n, x, z, octaves) {
+    let amp = 1, freq = 1, sum = 0, norm = 0;
+    for (let i = 0; i < octaves; i++) {
+      sum += n.noise2D(x * freq, z * freq) * amp;
+      norm += amp;
+      amp *= 0.5;
+      freq *= 2;
+    }
+    return sum / norm;
+  }
+
+  /** Bán kính bờ biển theo góc a (radian). */
+  coastRadius(a) {
+    let t = a / TAU;
+    t -= Math.floor(t);
+    const f = t * COAST_STEPS;
+    const i = Math.floor(f);
+    const k = f - i;
+    return this.coast[i] * (1 - k) + this.coast[i + 1] * k;
+  }
+
+  /** Độ cao "đất liền" nếu không có biển bao quanh. Chỉnh các hệ số để đổi hình dạng đảo. */
+  landHeight(x, z) {
+    const continent = this.fbm(this.shape, x * 0.0012, z * 0.0012, 3);
+    const hills = this.fbm(this.shape, x * 0.008 + 50, z * 0.008 + 50, 5);
+    const ridge = 1 - Math.abs(this.shape.noise2D(x * 0.0035 - 200, z * 0.0035 + 200));
+    const mountainMask = smoothstep(0.05, 0.45, continent);
+    return 8 + continent * 20 + hills * 12 * this.relief + ridge ** 3 * 80 * this.relief * mountainMask;
+  }
+
+  /** Độ cao tại toạ độ thế giới (x, z). Ngoài đảo luôn là SEA_FLOOR. */
+  height(x, z) {
+    const d = Math.hypot(x, z);
+    const rEff = this.coastRadius(Math.atan2(z, x));
+    if (d >= rEff) return SEA_FLOOR; // ngoài khơi: khỏi tính noise
+    const mask = smoothstep(0, rEff * 0.3, rEff - d); // 0 ở bờ -> 1 khi vào trong 30% bán kính (bãi biển thoải)
+    return Math.max(SEA_FLOOR, -12 + (this.landHeight(x, z) + 12) * mask);
+  }
+
+  /** Chunk nằm hoàn toàn ngoài đảo (chỉ có biển) -> khỏi dựng mesh, đã có mặt nước + đáy biển lo. */
+  isOpenSea(cx, cz, S) {
+    const x0 = cx * S;
+    const z0 = cz * S;
+    const x1 = x0 + S;
+    const z1 = z0 + S;
+    const mx = x0 + S / 2;
+    const mz = z0 + S / 2;
+    const pts = [[x0, z0], [x1, z0], [x0, z1], [x1, z1], [mx, z0], [mx, z1], [x0, mz], [x1, mz]];
+    let rMax = 0;
+    for (const [x, z] of pts) rMax = Math.max(rMax, this.coastRadius(Math.atan2(z, x)));
+    const dMin = Math.hypot(mx, mz) - S * 0.7072; // khoảng cách gần nhất từ tâm đảo tới chunk
+    return dMin > rMax * 1.06;
+  }
+
+  /** Mật độ rừng, khoảng [-1, 1]. */
+  forest(x, z) {
+    return this.fbm(this.forestNoise, x * 0.01, z * 0.01, 2);
+  }
+}

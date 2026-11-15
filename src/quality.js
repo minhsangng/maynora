@@ -22,7 +22,9 @@ export const DEFAULT_TIER = 1; // "Vừa"
 
 export function loadTierIndex() {
   try {
-    const v = Number(localStorage.getItem(PREF_KEY));
+    const raw = localStorage.getItem(PREF_KEY);
+    if (raw === null) return DEFAULT_TIER; // chưa lưu: Number(null) sẽ ra 0 (= mức Thấp) nên phải kiểm tra riêng
+    const v = Number(raw);
     if (Number.isInteger(v) && v >= 0 && v < TIERS.length) return v;
   } catch {
     /* bỏ qua */
@@ -50,4 +52,4 @@ export function chunkConfig(t) {
     bake: t.bake,
     simpleMaterials: t.simpleMaterials,
   };
-}s
+}

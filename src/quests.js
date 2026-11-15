@@ -6,8 +6,8 @@ const MAX_LEVEL = 30;
  * (Nhiệm vụ của từng đảo - để được dịch chuyển sang đảo khác - nằm trong islands.js)
  */
 export const QUEST_DEFS = [
-  { id: 'walk', title: 'Bước chân đầu tiên', desc: 'Đi bộ tổng cộng 150 m', stat: 'distance', goal: 150, reward: 'quy_ti' },
-  { id: 'jump', title: 'Nhảy cẫng lên', desc: 'Nhảy 5 lần', stat: 'jumps', goal: 5, reward: 'ca_sau' },
+  { id: 'walk', title: 'Bước chân đầu tiên', desc: 'Đi bộ tổng cộng 150 m', stat: 'distance', goal: 150, reward: 'ca_sau' },
+  { id: 'jump', title: 'Nhảy cẫng lên', desc: 'Nhảy 5 lần', stat: 'jumps', goal: 5, reward: 'quy_ti' },
   { id: 'climb', title: 'Leo đồi', desc: 'Leo cao hơn điểm xuất phát 15 m', stat: 'maxClimb', goal: 15, reward: 'nhat_long' },
   { id: 'meet', title: 'Làm quen', desc: 'Lại gần 3 mod hoang dã', stat: 'meets', goal: 3, reward: 'quy_su' },
 ];
@@ -23,6 +23,8 @@ export class GameState {
     this.done = {};
     this.islandIndex = 0;
     this.island = newIsland(); // tiến độ riêng của đảo hiện tại (reset khi sang đảo mới)
+    this.inv = { bread: 3, apple: 2 }; // túi đồ ăn: { id: số lượng }. Quà khởi đầu để không bị đói ngay
+    this.vitals = { hunger: 100, stamina: 100 };
     this.load();
   }
 
@@ -34,6 +36,8 @@ export class GameState {
       if (Array.isArray(d.party)) this.party = d.party;
       if (d.stats) this.stats = { ...DEFAULT_STATS, ...d.stats };
       if (d.done) this.done = d.done;
+      if (d.inv) this.inv = d.inv;
+      if (d.vitals) this.vitals = { hunger: 100, stamina: 100, ...d.vitals };
       if (Number.isInteger(d.islandIndex)) this.islandIndex = d.islandIndex;
       if (d.island) {
         const base = newIsland();
@@ -52,7 +56,15 @@ export class GameState {
     try {
       localStorage.setItem(
         SAVE_KEY,
-        JSON.stringify({ party: this.party, stats: this.stats, done: this.done, islandIndex: this.islandIndex, island: this.island }),
+        JSON.stringify({
+          party: this.party,
+          stats: this.stats,
+          done: this.done,
+          islandIndex: this.islandIndex,
+          island: this.island,
+          inv: this.inv,
+          vitals: this.vitals,
+        }),
       );
     } catch {
       /* bỏ qua */
@@ -73,6 +85,10 @@ export class GameState {
 
   maxLevel() {
     return Math.max(1, ...this.party.map((e) => e.level));
+  }
+
+  addFood(id, n = 1) {
+    this.inv[id] = (this.inv[id] ?? 0) + n;
   }
 
   recordWin() {

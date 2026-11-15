@@ -15,6 +15,8 @@ import { WATER_LEVEL } from './terraingen';
  *  maxSlope    độ dốc tối đa (|dh/dx| + |dh/dz|). 0.3 = gần phẳng, 1.2 = khá dốc
  *  density     (gen, x, z) => boolean, ví dụ chỉ mọc ở vùng rừng
  *  alignToGround  nghiêng theo mặt đất (hợp với đá)
+ *  collider    va chạm để người chơi không đi xuyên qua. { ratio } = bán kính theo tỉ lệ chiều cao (cây: thân nhỏ),
+ *              { bbox: true, scale } = theo bề ngang model (đá) Bỏ trống = đi xuyên được (cỏ).
  *  sink        chôn xuống đất bao nhiêu % chiều cao (0.1 = 10%)
  *  drawChunks  bán kính (chunk) vẽ mặc định nếu lớp kích thước không khai báo riêng
  *  doubleSide  vẽ 2 mặt (cỏ / lá dạng tấm phẳng)
@@ -28,9 +30,9 @@ export const PROP_DEFS = [
   {
     name: 'tree',
     variants: [
-      { url: '/models/tree1.glb', weight: 4 },
-      { url: '/models/tree2.glb', weight: 3 },
-      { url: '/models/tree3.glb', weight: 2 },
+      { url: '/models/tree.glb', weight: 4 },
+      { url: '/models/tree.glb', weight: 3 },
+      { url: '/models/tree.glb', weight: 2 },
     ],
     sizes: [
       { height: [3, 5], weight: 3, drawChunks: 2.5 }, // cây nhỏ / cây non
@@ -43,13 +45,14 @@ export const PROP_DEFS = [
     maxHeight: 42,
     maxSlope: 1.2,
     density: (gen, x, z) => gen.forest(x, z) > gen.forestThreshold, // ngưỡng rừng riêng của từng đảo
+    collider: { ratio: 0.045 }, // chỉ thân cây chắn đường (bán kính = 4.5% chiều cao)
   },
   {
     name: 'rock',
     variants: [
-      { url: '/models/rock1.glb', weight: 4 },
-      { url: '/models/rock2.glb', weight: 3 },
-      { url: '/models/rock3.glb', weight: 2 },
+      { url: '/models/rock.glb', weight: 4 },
+      { url: '/models/rock.glb', weight: 3 },
+      { url: '/models/rock.glb', weight: 2 },
     ],
     sizes: [
       { height: [0.3, 0.8], weight: 6, drawChunks: 2 }, // đá nhỏ
@@ -63,6 +66,7 @@ export const PROP_DEFS = [
     maxSlope: Infinity,
     alignToGround: true,
     sink: 0.12,
+    collider: { bbox: true, scale: 0.85 }, // theo bề ngang thật của model đá
   },
   {
     name: 'grass',

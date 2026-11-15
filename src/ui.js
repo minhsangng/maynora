@@ -8,6 +8,10 @@ function el(tag, parent, cls, html) {
 
 export class UI {
   constructor() {
+    const style = document.createElement('style');
+    style.textContent = CSS;
+    document.head.appendChild(style);
+
     this.root = el('div', document.body, 'mod-ui');
     this.toasts = el('div', this.root);
     this.toasts.id = 'm-toasts';
@@ -33,8 +37,38 @@ export class UI {
     this.questsOpen = false;
     this.qTimer = 0;
 
+    // --- thanh thể lực / độ đói / túi đồ ---
+    this.vitalsEl = el(
+      'div',
+      this.root,
+      null,
+      '<div class="row sta"><b>Thể lực</b><div class="m-bar"><i></i></div></div>' +
+        '<div class="row hun"><b>Độ đói</b><div class="m-bar"><i></i></div></div><div class="inv"></div>',
+    );
+    this.vitalsEl.id = 'm-vitals';
+    this.staRow = this.vitalsEl.querySelector('.sta');
+    this.hunRow = this.vitalsEl.querySelector('.hun');
+    this.invEl = this.vitalsEl.querySelector('.inv');
+    this.lastVitals = '';
+
     this.fadeEl = el('div', this.root);
     this.fadeEl.id = 'm-fade';
+  }
+
+  /** Cập nhật thanh thể lực / độ đói / túi đồ (chỉ chạm DOM khi giá trị thay đổi). foodInfo: { id: { name } } */
+  updateVitals(surv, inv, foodInfo) {
+    const items = Object.keys(inv).filter((id) => inv[id] > 0 && foodInfo[id]);
+    const sig = `${Math.round(surv.stamina)}|${Math.round(surv.hunger)}|${surv.exhausted}|${items.map((id) => id + inv[id]).join(',')}`;
+    if (sig === this.lastVitals) return;
+    this.lastVitals = sig;
+    this.staRow.querySelector('i').style.width = `${surv.stamina}%`;
+    this.hunRow.querySelector('i').style.width = `${surv.hunger}%`;
+    this.staRow.classList.toggle('ex', surv.exhausted);
+    this.staRow.classList.toggle('low', !surv.exhausted && surv.stamina < 25);
+    this.hunRow.classList.toggle('low', surv.hunger < 25);
+    this.invEl.innerHTML = items.length
+      ? items.map((id) => `${foodInfo[id].name} <b>${inv[id]}</b>`).join(' · ') + ' <u>— [E] ăn</u>'
+      : '<u>Túi trống — nhặt táo, quả mọng, nấm trên đảo</u>';
   }
 
   toast(text, ms = 3500) {
@@ -89,6 +123,12 @@ export class UI {
     this.movesEl.innerHTML =
       moves.map((m, i) => `<div class="m-mv"><b>${i + 1}</b>${m.name}<small>⚔${m.power}</small></div>`).join('') +
       `<div class="m-mv"><b>F</b>Bỏ chạy</div>`;
+    this.movesEl.classList.remove('hidden');
+  }
+
+  /** Dòng gợi ý nhỏ phía dưới khi đang đấu (trận đấu tự động nên không còn danh sách chiêu). */
+  battleHint(text) {
+    this.movesEl.innerHTML = `<div class="m-mv">${text}</div>`;
     this.movesEl.classList.remove('hidden');
   }
 

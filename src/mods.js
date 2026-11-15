@@ -2,18 +2,41 @@ import * as THREE from 'three';
 import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { makeLoader } from './loader';
 
+/**
+ * Danh sách mod. Mỗi mod:
+ *  id, name        định danh + tên hiển thị
+ *  url             file GLB (đặt trong public/). Bỏ trống hoặc file không có -> dùng hình nhộng màu `color`
+ *  height          chiều cao trong game (mét), model tự được chuẩn hoá về cỡ này
+ *  facing          nếu model quay sai hướng thì thử Math.PI (mặc định model nhìn về +Z như chuẩn glTF)
+ *  wildWeight      độ hay xuất hiện ngoài hoang dã (0 = không bao giờ xuất hiện)
+ *  hp, atk, defense, spd   chỉ số gốc (mỗi level +12%)
+ *  moves           tối đa 9 chiêu: { name, power, accuracy }
+ *  clips           tên clip animation CỦA MOD NÀY trong file GLB, gán theo trạng thái chung (mỗi mod tên khác nhau):
+ *                    idle   đứng yên (lặp)           walk / run   đi / chạy (lặp)
+ *                    attack đòn đánh thường          hit          bị đánh trúng
+ *                    die    gục xuống (giữ tư thế)   spawn        xuất hiện / được triệu hồi
+ *                    win    ăn mừng khi thắng
+ *                  Muốn thêm trạng thái riêng (vd attack2, special) cứ khai báo thêm, rồi gán cho chiêu bằng
+ *                  moves[].anim = 'attack2'. Chiêu không có anim (hoặc clip không tồn tại) dùng 'attack'.
+ *                  Trạng thái nào không khai báo sẽ tự dò theo tên clip; vẫn không có thì dùng hiệu ứng thủ tục
+ *                  (nhún nhảy, lao tới, rung, ngã) nên mod nào cũng chạy được kể cả khi chưa có animation.
+ *                  Mở console (F12) để xem danh sách clip có trong file và kết quả gán.
+ *                  Ví dụ: clips: { idle: 'Idle_A', walk: 'Walk', run: 'Run', attack: 'Bite', attack2: 'Fire',
+ *                                  hit: 'GetHit', die: 'Death', spawn: 'Appear', win: 'Cheer' }
+ *  moves[].impact  (tuỳ chọn) đòn trúng ở bao nhiêu % thời lượng clip tấn công (mặc định 0.45)
+ */
 export const MOD_DEFS = [
   {
-    id: 'quy_ti', name: 'Quỷ Tí', url: '/models/mods/demon.glb', color: 0xff6a3d, height: 1.1,
+    id: 'nhat_long', name: 'Nhất long', url: '/models/mods/carnotaurus.glb', color: 0xff6a3d, height: 1.1,
     wildWeight: 2, hp: 48, atk: 11, defense: 6, spd: 9,
     moves: [
       { name: 'Cào', power: 10, accuracy: 100 },
-      { name: 'Phun lửa', power: 16, accuracy: 90 },
+      { name: 'Phun lửa', power: 16, accuracy: 90, anim: 'attack2' }, // chưa khai báo clip attack2 thì tự dùng 'attack'
       { name: 'Húc', power: 13, accuracy: 95 },
     ],
   },
   {
-    id: 'nhat_long', name: 'Nhất Long', url: '/models/mods/carnotaurus.glb', color: 0x5cc45a, height: 1.1,
+    id: 'ca_sau', name: 'Cá sấu', url: '/models/mods/crockie.glb', color: 0x5cc45a, height: 1.1,
     wildWeight: 2, hp: 54, atk: 10, defense: 7, spd: 8,
     moves: [
       { name: 'Quất dây', power: 11, accuracy: 100 },
@@ -22,7 +45,7 @@ export const MOD_DEFS = [
     ],
   },
   {
-    id: 'ca_sau', name: 'Cá Sấu', url: '/models/mods/crokie.glb', color: 0x4aa8ff, height: 1.1,
+    id: 'quy_su', name: 'Quỷ sư', url: '/models/mods/criatura_espelmatica.glb', color: 0x4aa8ff, height: 1.1,
     wildWeight: 2, hp: 50, atk: 10, defense: 7, spd: 10,
     moves: [
       { name: 'Vỗ nước', power: 10, accuracy: 100 },
@@ -31,20 +54,28 @@ export const MOD_DEFS = [
     ],
   },
   {
-    id: 'quy_su', name: 'Quỷ Sư', url: '/models/mods/criatura_espelmatica.glb', color: 0x8d8a85, height: 1.5,
+  id: 'quy_ti', name: 'Quỷ tí', url: '/models/mods/demon.glb', color: 0x8d8a85, height: 1.5,
     wildWeight: 3, hp: 62, atk: 13, defense: 9, spd: 11,
-    moves: [],
+    moves: [
+      { name: 'Cắn', power: 12, accuracy: 100 },
+      { name: 'Ném đá', power: 17, accuracy: 88 },
+      { name: 'Vồ', power: 14, accuracy: 95 },
+    ],
   }
 ];
 
 const FADE = 0.2;
 const CLIP_PATTERNS = {
   idle: /idle|stand|breath/i,
-  walk: /walk|run|move/i,
-  attack: /attack|bite|claw|strike|punch|slash/i,
-  hit: /hit|hurt|damage|react/i,
-  faint: /death|die|faint|dead/i,
+  walk: /walk|move/i,
+  run: /run|sprint|gallop|dash/i,
+  attack: /attack|bite|claw|strike|punch|slash|kick|tackle/i,
+  hit: /hit|hurt|damage|react|flinch/i,
+  die: /death|die|faint|dead/i,
+  spawn: /spawn|appear|summon|intro|emerge/i,
+  win: /win|victory|cheer|celebrat|happy|taunt/i,
 };
+const loggedDefs = new Set(); // chỉ in kết quả gán animation 1 lần cho mỗi loại mod
 
 function lerpAngle(a, b, t) {
   let d = (b - a) % (Math.PI * 2);
@@ -156,6 +187,7 @@ export class ModActor {
     this.group.add(this.model);
 
     this.moving = false;
+    this.running = false; // đang chạy (dùng clip run nếu có)
     this.engaged = false;
     this.fainted = false;
     this.gone = false;
@@ -200,11 +232,24 @@ export class ModActor {
   }
 
   setupAnimations(root, animations) {
+    const clips = this.def.clips ?? {};
+    const byName = (name) => animations.find((c) => c.name.toLowerCase() === String(name).toLowerCase()) ?? null;
     const find = (key) => {
-      const o = this.def.clips?.[key];
-      if (o) return animations.find((c) => c.name.toLowerCase() === String(o).toLowerCase()) ?? null;
-      return animations.find((c) => CLIP_PATTERNS[key].test(c.name)) ?? null;
+      const given = (key === 'die' ? [clips.die, clips.faint] : [clips[key]]).filter(Boolean);
+      if (given.length > 0) {
+        for (const n of given) {
+          const c = byName(n);
+          if (c) return c;
+        }
+        console.warn(
+          `[mods] ${this.def.name}: không thấy clip "${given[0]}" cho trạng thái "${key}". Clip có trong file:`,
+          animations.map((c) => c.name),
+        );
+        return null;
+      }
+      return animations.find((c) => CLIP_PATTERNS[key].test(c.name)) ?? null; // chưa khai báo: tự dò theo tên
     };
+
     this.mixer = new THREE.AnimationMixer(root);
     const act = (clip, mode) => {
       if (!clip) return null;
@@ -213,15 +258,31 @@ export class ModActor {
       if (mode === 'hold') a.clampWhenFinished = true;
       return a;
     };
-    const idle = find('idle');
     const walk = find('walk');
     this.actions = {
-      idle: act(idle ?? walk),
+      idle: act(find('idle') ?? walk),
       walk: act(walk),
+      run: act(find('run')),
       attack: act(find('attack'), 'once'),
       hit: act(find('hit'), 'once'),
-      faint: act(find('faint'), 'hold'),
+      die: act(find('die'), 'hold'),
+      spawn: act(find('spawn'), 'once'),
+      win: act(find('win'), 'once'),
     };
+    // Trạng thái tuỳ ý khác (attack2, special...): phát 1 lần, gán cho chiêu bằng moves[].anim
+    for (const [key, name] of Object.entries(clips)) {
+      if (key in this.actions || key === 'faint') continue;
+      const c = byName(name);
+      if (c) this.actions[key] = act(c, 'once');
+      else console.warn(`[mods] ${this.def.name}: không thấy clip "${name}" cho trạng thái "${key}"`);
+    }
+    if (!loggedDefs.has(this.def.id)) {
+      loggedDefs.add(this.def.id);
+      console.log(
+        `[mods] ${this.def.name}: gán animation`,
+        Object.fromEntries(Object.entries(this.actions).filter(([, a]) => a).map(([k, a]) => [k, a.getClip().name])),
+      );
+    }
     this.mixer.addEventListener('finished', (e) => {
       if (e.action === this.once) this.once = null;
     });
@@ -261,6 +322,7 @@ export class ModActor {
   spawnIn(dur = 0.5) {
     this.scale = 0;
     this.scaleAnim = { t: 0, dur, from: 0, to: 1, ease: easeOutBack };
+    this.playOnce('spawn'); // có clip spawn thì phát thêm
   }
 
   vanish(dur = 0.35) {
@@ -279,21 +341,32 @@ export class ModActor {
       this.loopCurrent.fadeOut(0.1);
       this.loopCurrent = null;
     }
-    this.once = key === 'faint' ? null : a;
+    this.once = key === 'die' ? null : a; // die giữ tư thế cuối, không quay về idle
     return a.getClip().duration;
   }
 
   setLoop(name) {
-    const next = this.actions[name] ?? this.actions.idle ?? null;
+    const alt = name === 'run' ? this.actions.walk : name === 'walk' ? this.actions.run : null; // thiếu clip nào mượn clip còn lại
+    const next = this.actions[name] ?? alt ?? this.actions.idle ?? null;
     if (next === this.loopCurrent) return;
     next?.reset().setEffectiveWeight(1).fadeIn(FADE).play();
     this.loopCurrent?.fadeOut(FADE);
     this.loopCurrent = next;
   }
 
-  attack(reach = 2) {
-    this.playOnce('attack');
-    if (!this.actions.attack) this.fx = { type: 'lunge', t: 0, dur: 0.6, reach };
+  /** Ra đòn bằng clip `animKey` (không có thì dùng 'attack'). Trả về thời lượng (giây). */
+  attack(animKey = 'attack') {
+    const key = animKey && this.actions[animKey] ? animKey : 'attack';
+    const d = this.playOnce(key);
+    if (!this.actions[key]) this.fx = { type: 'lunge', t: 0, dur: 0.6, reach: 0.9 }; // không có clip: nhoài người tới
+    return d || 0.6;
+  }
+
+  /** Ăn mừng khi thắng. Trả về thời lượng (giây). */
+  win() {
+    const d = this.playOnce('win');
+    if (!this.actions.win) this.fx = { type: 'hop', t: 0, dur: 1.2 };
+    return d || 1.2;
   }
 
   hit() {
@@ -305,8 +378,8 @@ export class ModActor {
   faint() {
     if (this.fainted) return;
     this.fainted = true;
-    const d = this.playOnce('faint');
-    this.fx = { type: 'faint', t: 0, tip: !this.actions.faint, hold: Math.max(d, 0.9), fade: 0.6 };
+    const d = this.playOnce('die');
+    this.fx = { type: 'faint', t: 0, tip: !this.actions.die, hold: Math.max(d, 0.9), fade: 0.6 };
   }
 
   setOpacity(o) {
@@ -334,7 +407,7 @@ export class ModActor {
     }
     this.group.scale.setScalar(Math.max(this.scale, 0.0001));
 
-    if (this.mixer && !this.once && !this.fainted) this.setLoop(this.moving ? 'walk' : 'idle');
+    if (this.mixer && !this.once && !this.fainted) this.setLoop(this.moving ? (this.running ? 'run' : 'walk') : 'idle');
 
     // Hiệu ứng thủ tục: đặt lại rồi áp dụng mỗi frame
     const m = this.model;
@@ -343,7 +416,7 @@ export class ModActor {
     m.scale.set(1, 1, 1);
     if (!this.fainted) {
       if (!this.actions.idle) m.scale.y = 1 + Math.sin(this.time * 2.2) * 0.03; // thở nhẹ
-      if (this.moving && !this.actions.walk) m.position.y = Math.abs(Math.sin(this.time * 9)) * 0.1; // nhún bước
+      if (this.moving && !this.actions.walk && !this.actions.run) m.position.y = Math.abs(Math.sin(this.time * (this.running ? 14 : 9))) * 0.1; // nhún bước
     }
 
     const fx = this.fx;
@@ -352,6 +425,10 @@ export class ModActor {
       if (fx.type === 'lunge') {
         const u = Math.min(1, fx.t / fx.dur);
         m.position.z = Math.sin(Math.PI * u) * fx.reach;
+        if (u >= 1) this.fx = null;
+      } else if (fx.type === 'hop') {
+        const u = Math.min(1, fx.t / fx.dur);
+        m.position.y = Math.abs(Math.sin(fx.t * Math.PI * 3)) * 0.5 * (1 - u);
         if (u >= 1) this.fx = null;
       } else if (fx.type === 'shake') {
         const u = Math.min(1, fx.t / fx.dur);

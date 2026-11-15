@@ -15,23 +15,28 @@ canvas {
   top: 12px;
   left: 12px;
   color: #fff;
-  font: 13px/1.6 ui-monospace, Menlo, Consolas, monospace;
+  font:
+    13px/1.6 ui-monospace,
+    Menlo,
+    Consolas,
+    monospace;
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
   white-space: pre;
   pointer-events: none;
 }
-
 .mod-ui {
-  font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+  font-family:
+    system-ui,
+    -apple-system,
+    Segoe UI,
+    sans-serif;
   color: #fff;
   pointer-events: none;
-  user-select: none
+  user-select: none;
 }
-
 .mod-ui .hidden {
-  display: none !important
+  display: none !important;
 }
-
 #m-toasts {
   position: fixed;
   top: 16px;
@@ -41,38 +46,36 @@ canvas {
   flex-direction: column;
   gap: 8px;
   align-items: center;
-  z-index: 30
+  z-index: 30;
 }
-
 .m-toast {
-  background: rgba(20, 24, 32, .88);
-  border: 1px solid rgba(255, 255, 255, .2);
+  background: rgba(20, 24, 32, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   padding: 8px 16px;
   border-radius: 10px;
   font-size: 14px;
   opacity: 0;
   transform: translateY(-6px);
-  transition: opacity .25s, transform .25s
+  transition:
+    opacity 0.25s,
+    transform 0.25s;
 }
-
 .m-toast.show {
   opacity: 1;
-  transform: none
+  transform: none;
 }
-
 #m-prompt {
   position: fixed;
   bottom: 22%;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(20, 24, 32, .85);
-  border: 1px solid rgba(255, 255, 255, .25);
+  background: rgba(20, 24, 32, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.25);
   padding: 8px 18px;
   border-radius: 999px;
   font-size: 15px;
-  z-index: 20
+  z-index: 20;
 }
-
 #m-battle {
   position: fixed;
   top: 14px;
@@ -81,51 +84,46 @@ canvas {
   display: flex;
   gap: 14px;
   align-items: center;
-  z-index: 25
+  z-index: 25;
 }
-
 .m-side {
   width: 240px;
-  background: rgba(15, 18, 26, .85);
-  border: 1px solid rgba(255, 255, 255, .18);
+  background: rgba(15, 18, 26, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.18);
   padding: 8px 12px;
-  border-radius: 10px
+  border-radius: 10px;
 }
-
 .m-side .nm {
   font-size: 14px;
   font-weight: 600;
-  margin-bottom: 5px
+  margin-bottom: 5px;
 }
-
 .m-bar {
   height: 10px;
   background: #333;
   border-radius: 6px;
-  overflow: hidden
+  overflow: hidden;
 }
-
 .m-bar i {
   display: block;
   height: 100%;
   width: 100%;
   background: #4cd964;
-  transition: width .35s, background .3s
+  transition:
+    width 0.35s,
+    background 0.3s;
 }
-
 .m-side .hp {
   font-size: 12px;
-  opacity: .8;
+  opacity: 0.8;
   margin-top: 3px;
-  text-align: right
+  text-align: right;
 }
-
 .m-vs {
   font-weight: 800;
   color: #ffd54a;
-  font-size: 18px
+  font-size: 18px;
 }
-
 #m-moves {
   position: fixed;
   bottom: 28px;
@@ -133,27 +131,23 @@ canvas {
   transform: translateX(-50%);
   display: flex;
   gap: 10px;
-  z-index: 25
+  z-index: 25;
 }
-
 .m-mv {
-  background: rgba(15, 18, 26, .9);
-  border: 1px solid rgba(255, 255, 255, .25);
+  background: rgba(15, 18, 26, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.25);
   border-radius: 10px;
   padding: 8px 14px;
-  font-size: 14px
+  font-size: 14px;
 }
-
 .m-mv b {
   color: #ffd54a;
-  margin-right: 6px
+  margin-right: 6px;
 }
-
 .m-mv small {
-  opacity: .7;
-  margin-left: 6px
+  opacity: 0.7;
+  margin-left: 6px;
 }
-
 #m-msg {
   position: fixed;
   bottom: 104px;
@@ -163,67 +157,104 @@ canvas {
   font-weight: 600;
   text-shadow: 0 2px 5px #000;
   z-index: 25;
-  text-align: center
+  text-align: center;
 }
-
 #m-quests {
   position: fixed;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
   width: min(480px, 92vw);
-  background: rgba(15, 18, 26, .94);
-  border: 1px solid rgba(255, 255, 255, .22);
+  background: rgba(15, 18, 26, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: 14px;
   padding: 16px 20px;
-  z-index: 40
+  z-index: 40;
 }
-
 #m-quests h3 {
   margin: 0 0 10px;
-  font-size: 16px
+  font-size: 16px;
 }
-
 #m-quests h4 {
   margin: 14px 0 6px;
   font-size: 13px;
-  opacity: .7;
+  opacity: 0.7;
   text-transform: uppercase;
-  letter-spacing: .05em
+  letter-spacing: 0.05em;
 }
-
 .m-q {
   margin: 8px 0;
-  font-size: 14px
+  font-size: 14px;
 }
-
 .m-q .t {
   display: flex;
-  justify-content: space-between
+  justify-content: space-between;
 }
-
 .m-q small {
-  opacity: .7
+  opacity: 0.7;
 }
-
 .m-q .m-bar {
   margin-top: 4px;
-  height: 7px
+  height: 7px;
 }
-
 .m-q .m-bar i {
-  background: #4aa8ff
+  background: #4aa8ff;
 }
-
 .m-q.done .m-bar i {
-  background: #4cd964
+  background: #4cd964;
 }
-
 .m-party {
   font-size: 14px;
-  line-height: 1.7
+  line-height: 1.7;
 }
-
+#m-vitals {
+  position: fixed;
+  left: 14px;
+  bottom: 14px;
+  width: 230px;
+  background: rgba(15, 18, 26, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 10px;
+  padding: 8px 12px;
+  z-index: 15;
+  font-size: 12px;
+}
+#m-vitals .row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 3px 0;
+}
+#m-vitals .row b {
+  width: 52px;
+  font-weight: 600;
+}
+#m-vitals .m-bar {
+  flex: 1;
+  height: 9px;
+}
+#m-vitals .sta i {
+  background: #ffd54a;
+}
+#m-vitals .hun i {
+  background: #ff8a3d;
+}
+#m-vitals .sta.low i,
+#m-vitals .hun.low i {
+  background: #ff453a;
+}
+#m-vitals .sta.ex i {
+  background: #8e8e93;
+}
+#m-vitals .inv {
+  margin-top: 6px;
+  opacity: 0.85;
+  line-height: 1.5;
+}
+#m-vitals .inv u {
+  text-decoration: none;
+  opacity: 0.6;
+}
 #m-fade {
   position: fixed;
   inset: 0;
@@ -234,5 +265,5 @@ canvas {
   align-items: center;
   justify-content: center;
   font-size: 22px;
-  font-weight: 600
+  font-weight: 600;
 }
