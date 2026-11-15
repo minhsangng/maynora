@@ -144,7 +144,7 @@ async function start() {
   if (!ISLANDS[state.islandIndex]) state.setIsland(0, true);
 
   const terrain = new TerrainGenerator(ISLANDS[state.islandIndex]);
-  const props = new PropScatter(terrain, CHUNK_SIZE); // danh sách model cây/đá/cỏ chỉnh trong propDefs.js
+  const props = new PropScatter(terrain, CHUNK_SIZE); // danh sách model cây/đá/cỏ chỉnh trong propdefs.js
   const player = new Player(camera, renderer.domElement, terrain);
   scene.add(player.body);
   const survival = new Survival(state); // thể lực + độ đói

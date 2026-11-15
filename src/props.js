@@ -3,7 +3,7 @@ import { makeLoader } from './loader';
 import { PROP_DEFS } from './propdefs';
 import { hashName, makeCum } from './chunkbuild';
 
-// Cấu hình cây / đá / cỏ (model, kích cỡ, mật độ, va chạm...) nằm trong propDefs.js
+// Cấu hình cây / đá / cỏ (model, kích cỡ, mật độ, va chạm...) nằm trong propdefs.js
 export { PROP_DEFS };
 
 /** Đổi vật liệu PBR (MeshStandard...) sang Lambert: giữ màu/texture/alpha nhưng tính đèn nhẹ hơn nhiều. */
