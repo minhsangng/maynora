@@ -232,10 +232,10 @@ function placeFood(gen, cfg, cx, cz, grid) {
       const wx = ox + lx;
       const wz = oz + lz;
       if (def.density && !def.density(gen, wx, wz)) continue;
-      const y = g.h + def.size * 0.6;
-      setMatrix(data, n * 16, wx, y, wz, 0, Math.sin(rot / 2), 0, Math.cos(rot / 2), def.size, def.size, def.size);
+      // model đã chuẩn hoá cao 1, đáy ở y = 0 => scale = size (mét), đặt sát đất; pos = tâm vật để tính nhặt
+      setMatrix(data, n * 16, wx, g.h + 0.05, wz, 0, Math.sin(rot / 2), 0, Math.cos(rot / 2), def.size, def.size, def.size);
       pos[n * 3] = wx;
-      pos[n * 3 + 1] = y;
+      pos[n * 3 + 1] = g.h + def.size * 0.5;
       pos[n * 3 + 2] = wz;
       n++;
     }

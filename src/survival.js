@@ -1,7 +1,7 @@
 import { FOOD_INFO } from './fooddefs';
 
 // --- Cân bằng (chỉnh ở đây) ---------------------------------------------
-// effort = tốc độ hiện tại / tốc độ đi bộ: 0 đứng yên, 1 đi bộ, ~2.3 chạy nhanh (chạy 28 m/s / đi 12 m/s)
+// effort = tốc độ hiện tại / tốc độ đi bộ: 0 đứng yên, 1 đi bộ, ~2.3 chạy nhanh (chạy 16.8 m/s / đi 7.2 m/s)
 const STAMINA_REGEN = 18; // thể lực hồi / giây khi đứng yên (giảm dần về 0 khi tăng tốc tới mức đi bộ)
 const STAMINA_DRAIN = 7; // tốn / giây cho mỗi 1.0 effort VƯỢT mức đi bộ => chạy càng nhanh càng tốn
 const JUMP_COST = 10;
@@ -87,15 +87,19 @@ export class Survival {
    * Ăn 1 món trong túi. Ưu tiên món vừa đủ lấp phần đói còn thiếu (đỡ lãng phí);
    * không có món nào vừa thì ăn món nhỏ nhất.
    */
-  eat() {
+  eat(chosen = null) {
     const inv = this.state.inv;
     const items = Object.keys(inv).filter((id) => inv[id] > 0 && FOOD_INFO[id]);
     if (items.length === 0) return { ok: false, message: 'Túi đồ trống! Hãy tìm thực phẩm trên đảo.' };
     if (this.hunger > 92 && this.stamina > 92) return { ok: false, message: 'Bạn đang no, chưa cần ăn.' };
 
-    const deficit = 100 - this.hunger;
-    const fit = items.filter((id) => FOOD_INFO[id].hunger <= deficit).sort((a, b) => FOOD_INFO[b].hunger - FOOD_INFO[a].hunger);
-    const id = fit[0] ?? items.sort((a, b) => FOOD_INFO[a].hunger - FOOD_INFO[b].hunger)[0];
+    let id = chosen; // chosen = món người chơi chọn trong túi đồ; null = tự chọn món hợp nhất
+    if (id !== null && !items.includes(id)) return { ok: false, message: 'Bạn không còn món đó.' };
+    if (id === null) {
+      const deficit = 100 - this.hunger;
+      const fit = items.filter((i) => FOOD_INFO[i].hunger <= deficit).sort((a, b) => FOOD_INFO[b].hunger - FOOD_INFO[a].hunger);
+      id = fit[0] ?? items.sort((a, b) => FOOD_INFO[a].hunger - FOOD_INFO[b].hunger)[0];
+    }
     const info = FOOD_INFO[id];
     inv[id] -= 1;
     this.hunger = Math.min(100, this.hunger + info.hunger);

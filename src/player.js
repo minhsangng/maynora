@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import { makeLoader } from './loader';
 
 const EYE_HEIGHT = 1.6;
-const WALK_SPEED = 9; // m/s (đã gấp đôi so với trước)
-const RUN_SPEED = 22; // m/s khi giữ Shift (tốn thể lực + đói nhanh hơn, xem survival.js)
+const WALK_SPEED = 7.2; // m/s (= 1.2 lần tốc độ ban đầu là 6)
+const RUN_SPEED = 16.8; // m/s khi giữ Shift (= 1.2 lần 14; tốn thể lực + đói nhanh hơn, xem survival.js)
 const STEP_UP = 0.9; // mét: bước lên cao hơn mức này trong 1 bước thì coi là vách, bị chặn
 const MAX_SLOPE = 1.1; // độ dốc tối đa đi bộ lên được (1.1 ≈ 48°); dốc đứng hơn thì phải đi vòng
 const GRAVITY = 30;

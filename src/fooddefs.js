@@ -1,37 +1,41 @@
 import { WATER_LEVEL } from './terraingen';
 
 /**
- * Thực phẩm mọc tự nhiên trên đảo: đi tới gần để nhặt, nhấn E để ăn.
- * Rời khỏi vùng đó rồi quay lại thì mọc lại.
- *  hunger / stamina   hồi bao nhiêu điểm độ đói / thể lực khi ăn
- *  shape, size        hình dạng đơn giản (sphere | cone) và kích cỡ (mét)
- *  perChunk           số lần "thử đặt" mỗi chunk (số thực tế ít hơn vì bị lọc theo luật)
+ * TẤT CẢ vật phẩm ăn được. Mỗi món:
+ *  name             tên hiển thị
+ *  url              file GLB của món này (đặt trong public/models/items/). Không có file -> dùng hình khối đơn giản
+ *                   (shape: sphere | cone | box) tô màu `color`, nên chưa có model vẫn chơi được.
+ *                   Model tự được chuẩn hoá: cao đúng `size` mét, đáy đặt sát đất.
+ *  hunger, stamina  hồi bao nhiêu điểm độ đói / thể lực khi ăn
+ *  size             chiều cao trong game (mét)
+ *  grow             (tuỳ chọn) có thì món này MỌC TỰ NHIÊN trên đảo để nhặt:
+ *                     perChunk = số lần thử đặt mỗi chunk, minHeight/maxHeight/maxSlope/density = luật chỗ mọc.
+ *                   Không có `grow` = chỉ nhận từ trận đấu (xem `drops` của từng mod trong mods.js) hoặc quà khởi đầu.
+ * Thêm món mới: thêm 1 phần tử vào đây (và thêm file model nếu có).
  */
-export const FOOD_DEFS = [
-  {
-    id: 'apple', name: 'Táo', hunger: 22, stamina: 8, color: 0xe53935, shape: 'sphere', size: 0.45,
-    perChunk: 7, minHeight: WATER_LEVEL + 2, maxHeight: 40, maxSlope: 1.2,
-    density: (gen, x, z) => gen.forest(x, z) > gen.forestThreshold - 0.15, // gần khu rừng
+export const ITEM_DEFS = {
+  apple: {
+    name: 'Táo', url: '/models/items/apple.glb', hunger: 22, stamina: 8, color: 0xe53935, shape: 'sphere', size: 0.5,
+    grow: { perChunk: 7, minHeight: WATER_LEVEL + 2, maxHeight: 40, maxSlope: 1.2, density: (gen, x, z) => gen.forest(x, z) > gen.forestThreshold - 0.15 }, // gần khu rừng
   },
-  {
-    id: 'berry', name: 'Quả mọng', hunger: 10, stamina: 14, color: 0x7e57c2, shape: 'sphere', size: 0.3,
-    perChunk: 9, minHeight: WATER_LEVEL + 1.5, maxHeight: 45, maxSlope: 1.5,
+  berry: {
+    name: 'Quả mọng', url: '/models/items/berry.glb', hunger: 10, stamina: 14, color: 0x7e57c2, shape: 'sphere', size: 0.4,
+    grow: { perChunk: 9, minHeight: WATER_LEVEL + 1.5, maxHeight: 45, maxSlope: 1.5 },
   },
-  {
-    id: 'mushroom', name: 'Nấm', hunger: 16, stamina: 4, color: 0xffb74d, shape: 'cone', size: 0.4,
-    perChunk: 5, minHeight: WATER_LEVEL + 2, maxHeight: 60, maxSlope: 1.5,
-    density: (gen, x, z) => gen.forest(x, z) > gen.forestThreshold - 0.3,
+  mushroom: {
+    name: 'Nấm', url: '/models/items/mushroom.glb', hunger: 16, stamina: 4, color: 0xffb74d, shape: 'cone', size: 0.5,
+    grow: { perChunk: 5, minHeight: WATER_LEVEL + 2, maxHeight: 60, maxSlope: 1.5, density: (gen, x, z) => gen.forest(x, z) > gen.forestThreshold - 0.3 },
   },
-];
-
-/** Vật phẩm không mọc tự nhiên: nhận từ trận đấu hoặc quà khởi đầu. */
-const EXTRA = {
-  meat: { name: 'Thịt', hunger: 45, stamina: 10 },
-  bread: { name: 'Bánh mì', hunger: 30, stamina: 10 },
+  meat: { name: 'Thịt', url: '/models/items/meat.glb', hunger: 45, stamina: 10, color: 0xc0392b, shape: 'sphere', size: 0.55 },
+  bread: { name: 'Bánh mì', url: '/models/items/bread.glb', hunger: 30, stamina: 10, color: 0xd9a441, shape: 'box', size: 0.4 },
 };
 
-/** Tra cứu mọi loại thực phẩm theo id. */
-export const FOOD_INFO = {
-  ...Object.fromEntries(FOOD_DEFS.map((d) => [d.id, { name: d.name, hunger: d.hunger, stamina: d.stamina }])),
-  ...EXTRA,
-};
+/** Các món mọc tự nhiên (dạng phẳng, dùng trong worker để đặt lên map). */
+export const FOOD_DEFS = Object.entries(ITEM_DEFS)
+  .filter(([, d]) => d.grow)
+  .map(([id, d]) => ({ id, name: d.name, size: d.size, ...d.grow }));
+
+/** Tra cứu hiệu ứng ăn của mọi món theo id. */
+export const FOOD_INFO = Object.fromEntries(
+  Object.entries(ITEM_DEFS).map(([id, d]) => [id, { name: d.name, hunger: d.hunger, stamina: d.stamina }]),
+);

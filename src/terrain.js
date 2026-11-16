@@ -16,10 +16,11 @@ const MAX_INFLIGHT = 3; // số chunk gửi cho worker cùng lúc (ít để cò
  *  - Lưu vòng va chạm (cây, đá) và vị trí thực phẩm của từng chunk.
  */
 export class ChunkManager {
-  constructor(scene, gen, props, options = {}) {
+  constructor(scene, gen, props, options = {}, items = null) {
     this.scene = scene;
     this.gen = gen;
     this.props = props;
+    this.items = items; // ItemLibrary: model của trái cây
     this.cfg = {
       chunkSize: 64,
       resolution: 40, // số ô lưới / cạnh chunk
@@ -76,7 +77,7 @@ export class ChunkManager {
   startWorker() {
     if (typeof Worker === 'undefined') return;
     try {
-      const w = new Worker(new URL('./chunkworker.js', import.meta.url), { type: 'module' });
+      const w = new Worker(new URL('./chunkWorker.js', import.meta.url), { type: 'module' });
       w.onmessage = (e) => {
         if (e.data.type === 'chunk') this.ready.push(e.data);
       };
@@ -189,14 +190,21 @@ export class ChunkManager {
       });
     });
 
+    // Thực phẩm: mỗi mesh con của model = 1 batch dùng chung cho mọi chunk
     this.foodBatches = FOOD_DEFS.map((def) => {
-      const geo = def.shape === 'cone' ? new THREE.ConeGeometry(1, 1.4, 8) : new THREE.SphereGeometry(1, 8, 6);
-      const mat = new THREE.MeshBasicMaterial({ color: def.color });
-      this.own.push(geo, mat);
+      let parts = this.items?.parts(def.id) ?? [];
+      if (parts.length === 0) {
+        const geo = new THREE.SphereGeometry(0.5, 8, 6).translate(0, 0.5, 0);
+        const mat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        this.own.push(geo, mat);
+        parts = [{ geometry: geo, material: mat, materialSimple: mat }];
+      }
       const capacity = Math.max(16, Math.floor(def.perChunk * cfg.foodScale) * chunksIn(cfg.foodDraw));
-      const b = new InstanceBatch(this.scene, geo, mat, capacity);
-      this.batches.push(b);
-      return b;
+      return parts.map((part) => {
+        const b = new InstanceBatch(this.scene, part.geometry, cfg.simpleMaterials ? part.materialSimple : part.material, capacity);
+        this.batches.push(b);
+        return b;
+      });
     });
   }
 
@@ -335,7 +343,7 @@ export class ChunkManager {
     }
     const food = [];
     for (const f of r.food) {
-      this.foodBatches[f.ti]?.set(key, f.data, f.n, { ...meta, dc: this.cfg.foodDraw });
+      for (const b of this.foodBatches[f.ti] ?? []) b.set(key, f.data, f.n, { ...meta, dc: this.cfg.foodDraw });
       food.push({ id: FOOD_DEFS[f.ti].id, n: f.n, pos: f.pos, data: f.data, taken: new Uint8Array(f.n) });
     }
 

@@ -11,6 +11,9 @@ import { ISLAND_DEFS, Landmarks } from './islands';
 import { Survival } from './survival';
 import { FOOD_INFO } from './fooddefs';
 import { TIERS, loadTierIndex, saveTierIndex, chunkConfig } from './quality';
+import { ItemLibrary } from './items';
+import { Drops } from './drops';
+import { Menus } from './menus';
 import { UI } from './ui';
 
 // --- Đảo ----------------------------------------------------------------
@@ -144,13 +147,14 @@ async function start() {
   if (!ISLANDS[state.islandIndex]) state.setIsland(0, true);
 
   const terrain = new TerrainGenerator(ISLANDS[state.islandIndex]);
-  const props = new PropScatter(terrain, CHUNK_SIZE); // danh sách model cây/đá/cỏ chỉnh trong propdefs.js
+  const props = new PropScatter(terrain, CHUNK_SIZE); // danh sách model cây/đá/cỏ chỉnh trong propDefs.js
   const player = new Player(camera, renderer.domElement, terrain);
   scene.add(player.body);
   const survival = new Survival(state); // thể lực + độ đói
   survival.onMessage = (text) => ui.toast(text, 4000);
   player.survival = survival;
   const library = new ModLibrary(MOD_DEFS);
+  const items = new ItemLibrary(); // model trái cây + chiến lợi phẩm (foodDefs.js)
 
   // Tải model TRƯỚC khi tạo chunk đầu tiên (chunk cần model để rải)
   const [waterMat, waterNormal] = await Promise.all([
@@ -159,12 +163,13 @@ async function start() {
     props.load(),
     player.loadModel(PLAYER_MODEL, PLAYER_OPTS),
     library.load(),
+    items.load(),
   ]);
 
   let tierIndex = savedTier;
   let tier = TIERS[tierIndex];
   // Chunk được dựng trong Web Worker; cây/đá/cỏ gộp thành vài InstancedMesh dùng chung (ít draw call)
-  const chunks = new ChunkManager(scene, terrain, props, { chunkSize: CHUNK_SIZE, ...chunkConfig(tier) });
+  const chunks = new ChunkManager(scene, terrain, props, { chunkSize: CHUNK_SIZE, ...chunkConfig(tier) }, items);
 
   // Mặt nước phủ được tầm nhìn xa nhất của mọi mức chất lượng
   const maxView = Math.max(...TIERS.map((t) => t.viewRadius)) * CHUNK_SIZE;
@@ -194,13 +199,14 @@ async function start() {
     levelProvider: () => state.maxLevel(), // mod hoang dã có level quanh level mod mạnh nhất của bạn
   });
   const landmarks = new Landmarks(scene, terrain);
+  const drops = new Drops(scene, items, terrain); // vật phẩm rơi sau khi thắng
   const quests = new QuestManager(state, {
     onComplete: (q, entry) =>
       ui.toast(`Hoàn thành "${q.title}"! Nhận mod tân thủ: ${library.def(entry.id)?.name ?? entry.id}`, 5000),
     onIslandQuest: (q, lead) =>
       ui.toast(`Nhiệm vụ đảo "${q.title}" hoàn thành!${lead ? ` ${library.def(lead.id)?.name ?? lead.id} lên Lv ${lead.level}` : ''}`, 5000),
   });
-  const battle = new BattleSystem({ scene, camera, player, terrain, library, effects, ui, state, wild });
+  const battle = new BattleSystem({ scene, camera, player, terrain, library, effects, ui, state, wild, drops });
   const hasMod = () => !!state.lead((id) => library.def(id));
 
   // --- Mức chất lượng + tự điều chỉnh -------------------------------------
@@ -238,6 +244,7 @@ async function start() {
     wild.clear();
     wild.setPool(def.wild);
     effects.clear();
+    drops.clear();
     state.island.stats.landmarks = state.island.visited.length;
     landmarks.build(def, state.island.visited, (i) => {
       if (!state.island.visited.includes(i)) state.island.visited.push(i);
@@ -254,11 +261,40 @@ async function start() {
 
   let transitioning = false;
   let teleportIn = null;
+
+  // Túi đồ (mod + vật phẩm) và hộp chọn mod ra trận. Mở cửa sổ thì khoá người chơi; đang đấu / chuyển cảnh thì không mở được.
+  const menus = new Menus({
+    ui,
+    state,
+    library,
+    survival,
+    canOpen: () => !battle.active && !transitioning,
+    setLock: (on) => {
+      if (on) player.locked = true;
+      else if (!battle.active && !transitioning) player.locked = false;
+    },
+  });
+
+  /** Nhấn J: chọn mod trong đội (luôn hiện hộp chọn, kể cả chỉ có 1 mod) rồi vào trận. */
+  function challenge() {
+    const target = wild.nearest(player.position, CHALLENGE_RANGE);
+    if (!target) return ui.toast('Không có mod hoang dã nào ở gần để thách đấu.');
+    if (menus.party().length === 0) return ui.toast('Bạn chưa có mod nào! Hoàn thành nhiệm vụ tân thủ để nhận mod.');
+    target.engaged = true; // đứng yên tại chỗ trong lúc bạn chọn
+    target.moving = false;
+    menus.openSelect(
+      `Chọn mod ra trận đấu với ${target.tag}`,
+      (entry) => battle.start(target, entry),
+      () => {
+        target.engaged = false;
+      },
+    );
+  }
   async function teleportNext() {
     if (transitioning) return;
     transitioning = true;
     player.locked = true;
-    ui.closeQuests();
+    menus.close();
     const nextIndex = (state.islandIndex + 1) % ISLANDS.length;
     await ui.fade(true, 900, `Đang dịch chuyển tới ${ISLANDS[nextIndex].name}...`);
     state.setIsland(nextIndex, true);
@@ -276,19 +312,18 @@ async function start() {
     if (e.code === 'BracketRight') return applyTier(tierIndex + 1); // tăng chất lượng
     if (e.code === 'BracketLeft') return applyTier(tierIndex - 1); // giảm chất lượng
     if (transitioning) return;
+    if (menus.active) {
+      menus.handleKey(e.code, e); // túi đồ / chọn mod: nuốt mọi phím
+      return;
+    }
     if (battle.active) {
       battle.onKey(e.code); // trận đấu tự động; chỉ có F: rút lui
       return;
     }
-    if (e.code === 'KeyJ') {
-      const target = wild.nearest(player.position, CHALLENGE_RANGE);
-      if (target) battle.start(target);
-      else ui.toast('Không có mod hoang dã nào ở gần để thách đấu.');
-    } else if (e.code === 'KeyQ') {
-      ui.toggleQuests(quests.snapshot(library));
-    } else if (e.code === 'KeyE') {
-      ui.toast(survival.eat().message, 2000);
-    }
+    if (e.code === 'KeyJ') challenge();
+    else if (e.code === 'KeyI') menus.toggleBag();
+    else if (e.code === 'KeyQ') ui.toggleTrackerExpanded(); // thanh nhiệm vụ: gọn <-> chi tiết
+    else if (e.code === 'KeyE') ui.toast(survival.eat().message, 2000);
   });
   window.addEventListener('beforeunload', () => state.save());
 
@@ -301,6 +336,8 @@ async function start() {
     chunks,
     survival,
     player,
+    menus,
+    drops,
     giveMod: (id) => {
       state.addMod(id);
       ui.toast(`Đã nhận ${library.def(id)?.name ?? id}`);
@@ -316,6 +353,7 @@ async function start() {
   const clock = new THREE.Clock();
   let hudTimer = 0;
   let vitalsTimer = 0;
+  let trackerTimer = 0;
   let fpsTime = 0;
   let fpsFrames = 0;
   let fps = 0;
@@ -339,10 +377,12 @@ async function start() {
     landmarks.update(dt, player.position);
     quests.update(player, dt);
     battle.update(dt); // phải gọi SAU player.update vì nó điều chỉnh camera
-    ui.update(dt, () => quests.snapshot(library));
+    drops.update(dt, player.position);
 
-    // Nhặt thực phẩm khi đi tới gần
-    const picked = chunks.collectFood(player.position.x, player.position.y, player.position.z, PICKUP_RADIUS);
+    // Nhặt thực phẩm (mọc tự nhiên + chiến lợi phẩm rơi ra) khi đi tới gần
+    const picked = chunks
+      .collectFood(player.position.x, player.position.y, player.position.z, PICKUP_RADIUS)
+      .concat(drops.collect(player.position, PICKUP_RADIUS));
     if (picked.length > 0) {
       const counts = {};
       for (const id of picked) counts[id] = (counts[id] ?? 0) + 1;
@@ -367,7 +407,7 @@ async function start() {
     }
 
     // Gợi ý thách đấu khi lại gần mod hoang dã
-    const near = battle.active ? null : wild.nearest(player.position, CHALLENGE_RANGE);
+    const near = battle.active || menus.active ? null : wild.nearest(player.position, CHALLENGE_RANGE);
     if (near && !near.met) {
       near.met = true;
       state.recordMeet(); // cho nhiệm vụ "Làm quen" (tân thủ) và "Nhà thám hiểm" (đảo)
@@ -375,8 +415,8 @@ async function start() {
     ui.prompt(
       near
         ? hasMod()
-          ? `[J] Thách đấu ${near.tag} (trận đấu tự động)`
-          : `${near.tag} — bạn chưa có mod. Nhấn Q để xem nhiệm vụ nhận mod tân thủ`
+          ? `[J] Thách đấu ${near.tag} (chọn mod ra trận, trận đấu tự động)`
+          : `${near.tag} — bạn chưa có mod. Hoàn thành nhiệm vụ tân thủ (khung bên phải) để nhận mod`
         : null,
     );
 
@@ -418,6 +458,12 @@ async function start() {
       vitalsTimer = 0;
       ui.updateVitals(survival, state.inv, FOOD_INFO);
     }
+    trackerTimer += dt;
+    if (trackerTimer > 0.25) {
+      trackerTimer = 0;
+      ui.updateTracker(quests.snapshot(library)); // thanh nhiệm vụ luôn hiện ở góc phải
+      ui.setTrackerVisible(!battle.active && !transitioning);
+    }
 
     hudTimer += dt;
     if (hudTimer > 0.25) {
@@ -428,8 +474,8 @@ async function start() {
       const def = ISLANDS[state.islandIndex];
       const bound = frameMs > (jsMs + renderMs) * 1.5 + 3 ? 'GPU / vsync' : 'CPU';
       hud.textContent =
-        `Click: khoá chuột | WASD | Shift: chạy (tốn thể lực + đói) | Space: nhảy | V: góc nhìn | E: ăn\n` +
-        `J: thách đấu (trận tự động) | Q: nhiệm vụ & mod | F: rút lui khi đang đấu | [ ]: chất lượng\n` +
+        `Click: khoá chuột | WASD | Shift: chạy (tốn thể lực + đói) | Space: nhảy | V: góc nhìn | E: ăn nhanh\n` +
+        `J: thách đấu (chọn mod) | I: túi đồ (mod + vật phẩm) | Q: chi tiết nhiệm vụ | F: rút lui khi đang đấu | [ ]: chất lượng\n` +
         `${def.name} | hải đăng: ${beacon ? `${arrowTo(player, beacon.x, beacon.z)} ${beacon.dist.toFixed(0)} m` : 'đã thắp hết'} | ` +
         `mod hoang dã: ${wild.list.length} | trận đấu: ${battle.phase}\n` +
         `Chất lượng: ${tier.name} | FPS ${fps.toFixed(0)} | khung ${frameMs.toFixed(1)} ms (JS ${jsMs.toFixed(1)} + render ${renderMs.toFixed(1)}) | nghẽn: ${bound}\n` +

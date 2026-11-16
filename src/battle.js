@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { rollDrops } from './drops';
+import { FOOD_INFO } from './fooddefs';
 
 const ARENA_GAP = 10; // khoảng cách giữa 2 mod lúc đứng chờ (mét) = "không gian chiến đấu"
 const PLAYER_TO_MOD = 2.5; // mod của bạn đứng cách player bao xa
@@ -51,7 +53,7 @@ export function chooseMove(att, tgt, rng = Math.random) {
  *  outro -> thu mod về, camera quay lại
  */
 export class BattleSystem {
-  constructor({ scene, camera, player, terrain, library, effects, ui, state, wild }) {
+  constructor({ scene, camera, player, terrain, library, effects, ui, state, wild, drops = null }) {
     this.scene = scene;
     this.camera = camera;
     this.player = player;
@@ -61,6 +63,7 @@ export class BattleSystem {
     this.ui = ui;
     this.state = state;
     this.wild = wild;
+    this.drops = drops; // vật phẩm rơi trên đất (null = cộng thẳng vào túi)
 
     this.phase = 'none';
     this.lastPhase = 'none';
@@ -94,17 +97,18 @@ export class BattleSystem {
     this.tweens.push({ actor, from: actor.group.position.clone(), to: to.clone(), t: 0, dur, onDone });
   }
 
-  start(foe) {
+  /** Bắt đầu trận với mod hoang dã `foe`. `entry` = mod người chơi CHỌN từ đội (không chọn thì lấy mod đầu tiên). */
+  start(foe, entry = null) {
     if (this.active) return;
     try {
-      this.begin(foe);
+      this.begin(foe, entry);
     } catch (err) {
       this.abort(err);
     }
   }
 
-  begin(foe) {
-    const entry = this.state.lead((id) => this.library.def(id));
+  begin(foe, chosen) {
+    const entry = chosen && this.library.def(chosen.id) ? chosen : this.state.lead((id) => this.library.def(id));
     if (!entry) {
       this.ui.toast('Bạn chưa có mod nào! Nhấn Q để xem nhiệm vụ nhận mod tân thủ.');
       return;
@@ -315,11 +319,28 @@ export class BattleSystem {
       entry.level += 1;
       this.ui.toast(`${mine.name} lên Lv ${entry.level}!`);
     }
-    this.state.addFood?.('meat', 1); // phần thưởng: thực phẩm
-    this.ui.toast('Nhận 1 Thịt (nhấn E để ăn)', 3000);
+    this.dropLoot(foe);
     this.state.recordWin();
     this.state.save();
     this.later(Math.max(2, d + 0.5), () => this.finish());
+  }
+
+  /** Chiến lợi phẩm rơi xuống đất tại chỗ mod hoang dã gục; lại gần là nhặt (có model riêng, xem foodDefs.js). */
+  dropLoot(foe) {
+    const ids = rollDrops(foe.def);
+    if (ids.length === 0) return;
+    const p = foe.group.position;
+    ids.forEach((id, i) => {
+      const a = (i / ids.length) * Math.PI * 2 + 0.7;
+      const r = ids.length > 1 ? 1.3 : 0;
+      if (this.drops) this.drops.spawn(id, p.x + Math.cos(a) * r, p.z + Math.sin(a) * r);
+      else this.state.addFood?.(id, 1);
+    });
+    this.effects.ring(p, 0xffd54a, 1.6);
+    const counts = {};
+    for (const id of ids) counts[id] = (counts[id] ?? 0) + 1;
+    const text = Object.entries(counts).map(([id, n]) => `${FOOD_INFO[id]?.name ?? id} ×${n}`).join(', ');
+    this.ui.toast(`Chiến lợi phẩm rơi ra: ${text} — lại gần để nhặt`, 4500);
   }
 
   defeat() {
