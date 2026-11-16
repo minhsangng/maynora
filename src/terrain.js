@@ -77,7 +77,7 @@ export class ChunkManager {
   startWorker() {
     if (typeof Worker === 'undefined') return;
     try {
-      const w = new Worker(new URL('./chunkWorker.js', import.meta.url), { type: 'module' });
+      const w = new Worker(new URL('./chunkworker.js', import.meta.url), { type: 'module' });
       w.onmessage = (e) => {
         if (e.data.type === 'chunk') this.ready.push(e.data);
       };
