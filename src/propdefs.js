@@ -16,7 +16,7 @@ import { WATER_LEVEL } from './terraingen';
  *  density     (gen, x, z) => boolean, ví dụ chỉ mọc ở vùng rừng
  *  alignToGround  nghiêng theo mặt đất (hợp với đá)
  *  collider    va chạm để người chơi không đi xuyên qua. { ratio } = bán kính theo tỉ lệ chiều cao (cây: thân nhỏ),
- *              { bbox: true, scale } = theo bề ngang model (đá) Bỏ trống = đi xuyên được (cỏ).
+ *              { bbox: true, scale } = theo bề ngang model (đá). Bỏ trống = đi xuyên được (cỏ).
  *  sink        chôn xuống đất bao nhiêu % chiều cao (0.1 = 10%)
  *  drawChunks  bán kính (chunk) vẽ mặc định nếu lớp kích thước không khai báo riêng
  *  doubleSide  vẽ 2 mặt (cỏ / lá dạng tấm phẳng)
