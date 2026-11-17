@@ -27,7 +27,7 @@ app.get("/api/v1/get-all-users", async (req, res) => {
 });
 
 /* SERVE REACT BUILD */
-const distPath = path.join(__dirname, "..", "");
+const distPath = path.join(__dirname, "..", "..", "dist");
 app.use(express.static(distPath));
 
 app.get(/^(?!\/api).*/, (req, res) => {
