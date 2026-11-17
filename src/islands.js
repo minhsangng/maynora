@@ -36,7 +36,7 @@ export const ISLAND_DEFS = [
     radius: 800,
     relief: 1.0,
     forestThreshold: -0.15,
-    wild: ['moc_ti', 'cu_dem', 'rua_co', 'soi_da'],
+    wild: ['quy_ti', 'ca_sau', 'quy_su', 'nhat_long'],
     landmarks: 4,
     quests: [
       { id: 'beacons', title: 'Thắp sáng hải đăng', desc: 'Chạm vào cả 4 cột sáng trên đảo', stat: 'landmarks', goal: 4 },
@@ -51,7 +51,7 @@ export const ISLAND_DEFS = [
     radius: 900,
     relief: 1.4,
     forestThreshold: 0.3,
-    wild: ['soi_da', 'cu_dem', 'rua_co', 'hoa_ti'],
+    wild: ['quy_ti', 'ca_sau', 'quy_su', 'nhat_long'],
     landmarks: 5,
     quests: [
       { id: 'beacons', title: 'Thắp sáng hải đăng', desc: 'Chạm vào cả 5 cột sáng trên đảo', stat: 'landmarks', goal: 5 },
