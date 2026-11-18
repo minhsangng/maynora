@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&display=swap');
+
 html,
 body {
   margin: 0;
@@ -23,6 +25,15 @@ canvas {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
   white-space: pre;
   pointer-events: none;
+}
+
+.m-version {
+  position: fixed;
+  bottom: .75rem;
+  right: 1rem;
+  color: #D3D3D3;
+  font-size: .75rem;
+  font-family: system-ui, -apple-system, Segoe UI, sans-serif;
 }
 
 .mod-ui {
@@ -415,8 +426,6 @@ canvas {
   font-size: 22px;
   font-weight: 600
 }
-
-@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&display=swap');
 
 .mod-ui {
   --paper: #f7ebd0;
