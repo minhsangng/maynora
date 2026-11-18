@@ -1,6 +1,6 @@
 create table if not exists players (
   id          uuid primary key default gen_random_uuid(),
-  name        text not null default 'Người chơi',
+  name        text not null default 'player',
   key_hash    text not null,
   created_at  timestamptz not null default now()
 );

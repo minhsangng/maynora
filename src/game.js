@@ -18,6 +18,7 @@ const MAX_EVENT_CHARS = 1_000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const KEY_RE = /^[0-9a-f]{64}$/i;
 const TYPE_RE = /^[a-z_]{1,32}$/;
+const ENV = process.env;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -61,7 +62,7 @@ function cleanEvents(list) {
  * createHandler({ getSql, env }): tách riêng để kiểm thử được bằng "sql giả".
  * getSql() trả về hàm sql dạng tagged template của @neondatabase/serverless.
  */
-export function createHandler({ getSql, env = process.env }) {
+export function createHandler({ getSql, env = ENV }) {
   const hashKey = (key) => createHmac('sha256', env.KEY_PEPPER ?? '').update(key).digest('hex');
 
   async function authenticate(sql, body) {
@@ -106,7 +107,6 @@ export function createHandler({ getSql, env = process.env }) {
         if (json.length > MAX_DATA_CHARS) throw new ApiError(413, 'too_large');
         const base = Number.isInteger(body.base) && body.base >= 0 ? body.base : 0;
 
-        // Ghi có điều kiện: chỉ cập nhật khi phiên bản trên máy chủ đúng bằng phiên bản client dựa vào.
         const rows = await sql`
           insert into saves (player_id, data, version)
           values (${pid}, ${json}::jsonb, 1)
@@ -119,7 +119,6 @@ export function createHandler({ getSql, env = process.env }) {
           return send(res, 409, { ok: false, error: 'conflict', version: cur[0]?.version ?? 0, data: cur[0]?.data ?? null });
         }
 
-        // Nhật ký sự kiện: lỗi ở đây không làm hỏng việc lưu; báo eventsOk=false để client gửi lại lần sau.
         let eventsOk = true;
         const events = cleanEvents(body.events);
         if (events.length > 0) {
@@ -138,7 +137,7 @@ export function createHandler({ getSql, env = process.env }) {
       throw new ApiError(400, 'unknown_action');
     } catch (err) {
       if (err instanceof ApiError) return send(res, err.status, { ok: false, error: err.code });
-      console.error('[api/game]', err); // không trả chi tiết lỗi về client
+      console.error('[api/game]', err);
       return send(res, 500, { ok: false, error: 'server_error' });
     }
   };
@@ -146,13 +145,12 @@ export function createHandler({ getSql, env = process.env }) {
 
 let cachedHandler = null;
 
-// Hàm Vercel gọi. Tạo handler thật 1 lần cho mỗi lần "khởi động nguội" (kết nối Neon được dùng lại).
 export default async function handler(req, res) {
   if (!cachedHandler) {
     let sql = null;
-    if (process.env.DATABASE_URL) {
-      const { neon } = await import('@neondatabase/serverless'); // chỉ nạp khi có DATABASE_URL (ping không cần)
-      sql = neon(process.env.DATABASE_URL);
+    if (ENV.DATABASE_URL) {
+      const { neon } = await import('@neondatabase/serverless');
+      sql = neon(ENV.DATABASE_URL);
     }
     cachedHandler = createHandler({ getSql: () => sql });
   }
