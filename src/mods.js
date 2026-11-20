@@ -50,7 +50,7 @@ export const MOD_DEFS = [
     ],
   },
   {
-    id: 'quy_su', name: 'Quỷ Sư', url: '/models/mods/criatura_espelmatica.glb', color: 0x4aa8ff, height: 1.5,
+    id: 'quy_su', name: 'Quỷ Sư', url: '/models/mods/magician_ghost.glb', color: 0x4aa8ff, height: 1.5,
     wildWeight: 2, hp: 44, atk: 14, defense: 5, spd: 12,
     drops: [{ item: 'mushroom', chance: 0.6 }, { item: 'berry', chance: 0.3 }],
     moves: [

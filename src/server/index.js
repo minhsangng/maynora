@@ -3,12 +3,15 @@ import "dotenv/config";
 import path from "path";
 import { fileURLToPath } from "url";
 import handler from "../game.js";
+import cronjob from "./cron.js";
 
 /* CONFIG */
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const ENV = process.env;
 const PORT = ENV.PORT || 5001;
+
+cronjob.start();
 
 app.set("trust proxy", 1);
 app.use(express.json({ limit: "256kb" }));
