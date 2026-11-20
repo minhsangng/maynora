@@ -24,14 +24,14 @@ import { makeLoader } from './loader';
  *                  Ví dụ: clips: { idle: 'Idle_A', walk: 'Walk', run: 'Run', attack: 'Bite', attack2: 'Fire',
  *                                  hit: 'GetHit', die: 'Death', spawn: 'Appear', win: 'Cheer' }
  *  moves[].impact  (tuỳ chọn) đòn trúng ở bao nhiêu % thời lượng clip tấn công (mặc định 0.45)
- *  drops           (tuỳ chọn) vật phẩm rơi ra khi mod hoang dã này bị đánh bại, id lấy từ ITEM_DEFS (foodDefs.js):
+ *  drops           (tuỳ chọn) vật phẩm rơi ra khi mod hoang dã này bị đánh bại, id lấy từ ITEM_DEFS (fooddefs.js):
  *                    [{ item: 'meat', chance: 1, count: [1, 2] }, { item: 'apple', chance: 0.3 }]
  *                  Không khai báo thì rơi 1 Thịt. Vật phẩm rơi xuống đất (có model), lại gần là nhặt.
  */
 export const MOD_DEFS = [
   {
-    id: 'quy_ti', name: 'Quỷ Tí', url: '/models/mods/demon.glb', color: 0xff6a3d, height: 1.1,
-    wildWeight: 2, hp: 48, atk: 11, defense: 6, spd: 9,
+    id: 'quy_ti', name: 'Quỷ Tí', url: '/models/mods/demon.glb', color: 0xff6a3d, height: 1.4,
+    wildWeight: 2, hp: 48, atk: 13, defense: 6, spd: 10,
     drops: [{ item: 'meat', chance: 1 }, { item: 'berry', chance: 0.4, count: [1, 2] }],
     moves: [
       { name: 'Cào', power: 10, accuracy: 100 },
@@ -40,33 +40,35 @@ export const MOD_DEFS = [
     ],
   },
   {
-    id: 'nhat_long', name: 'Nhất long', url: '/models/mods/carnotaurus.glb', color: 0x5cc45a, height: 1.1,
-    wildWeight: 2, hp: 54, atk: 10, defense: 7, spd: 8,
+    id: 'nhat_long', name: 'Nhất Long', url: '/models/mods/carnotaurus.glb', color: 0x5cc45a, height: 1.8,
+    wildWeight: 2, hp: 58, atk: 14, defense: 7, spd: 9,
+    drops: [{ item: 'meat', chance: 1, count: [1, 2] }],
     moves: [
-      { name: 'Quất dây', power: 11, accuracy: 100 },
-      { name: 'Lá cắt', power: 15, accuracy: 92 },
-      { name: 'Đâm gai', power: 14, accuracy: 95 },
+      { name: 'Cắn xé', power: 12, accuracy: 100 },
+      { name: 'Húc sừng', power: 16, accuracy: 92 },
+      { name: 'Quật đuôi', power: 14, accuracy: 95, anim: 'attack2' },
     ],
   },
   {
-    id: 'quy_su', name: 'Quỷ sư', url: '/models/mods/criatura_espelmatica.glb', color: 0x4aa8ff, height: 1.1,
-    wildWeight: 2, hp: 50, atk: 10, defense: 7, spd: 10,
+    id: 'quy_su', name: 'Quỷ Sư', url: '/models/mods/criatura_espelmatica.glb', color: 0x4aa8ff, height: 1.5,
+    wildWeight: 2, hp: 44, atk: 14, defense: 5, spd: 12,
+    drops: [{ item: 'mushroom', chance: 0.6 }, { item: 'berry', chance: 0.3 }],
     moves: [
-      { name: 'Vỗ nước', power: 10, accuracy: 100 },
-      { name: 'Bắn bọt', power: 15, accuracy: 95 },
-      { name: 'Sóng lớn', power: 18, accuracy: 85 },
+      { name: 'Bóng ma', power: 11, accuracy: 100 },
+      { name: 'Tiếng thét', power: 15, accuracy: 92, anim: 'attack2' },
+      { name: 'Hút hồn', power: 17, accuracy: 88 },
     ],
   },
   {
-    id: 'ca_sau', name: 'Cá sấu', url: '/models/mods/crockie.glb', color: 0x8d8a85, height: 1.5,
-    wildWeight: 3, hp: 62, atk: 13, defense: 9, spd: 11,
+    id: 'ca_sau', name: 'Cá Sấu', url: '/models/mods/crockie.glb', color: 0x8d8a85, height: 0.9,
+    wildWeight: 3, hp: 70, atk: 12, defense: 11, spd: 6,
     drops: [{ item: 'meat', chance: 1, count: [1, 2] }, { item: 'mushroom', chance: 0.3 }],
     moves: [
-      { name: 'Cắn', power: 12, accuracy: 100 },
-      { name: 'Ném đá', power: 17, accuracy: 88 },
-      { name: 'Vồ', power: 14, accuracy: 95 },
+      { name: 'Cắn xé', power: 12, accuracy: 100 },
+      { name: 'Quẫy đuôi', power: 15, accuracy: 90, anim: 'attack2' },
+      { name: 'Vồ mồi', power: 14, accuracy: 95 },
     ],
-  }
+  },
 ];
 
 /** Chỉ số của 1 mod theo level (mỗi level +12%). Dùng cho cả trong trận lẫn giao diện túi đồ. */

@@ -3,11 +3,11 @@ import { extractParts } from './modelutils';
 import { PROP_DEFS } from './propdefs';
 import { hashName, makeCum } from './chunkbuild';
 
-// Cấu hình cây / đá / cỏ (model, kích cỡ, mật độ, va chạm...) nằm trong propDefs.js
+// Cấu hình cây / đá / cỏ (model, kích cỡ, mật độ, va chạm...) nằm trong propdefs.js
 export { PROP_DEFS };
 
 /**
- * Nạp model GLB cho các loại prop (1 lần). Việc ĐẶT cây/đá lên map làm trong worker (chunkBuild.js).
+ * Nạp model GLB cho các loại prop (1 lần). Việc ĐẶT cây/đá lên map làm trong worker (chunkbuild.js).
  * Variant nào không tải được thì bỏ qua; cả loại không có variant nào thì bỏ loại đó.
  */
 export class PropScatter {

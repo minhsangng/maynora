@@ -118,6 +118,7 @@ export class BattleSystem {
     this.foe = foe;
     this.round = 0;
     this.fleeRequested = false;
+    this.result = null;
     foe.engaged = true;
 
     // Hình học khu đấu: player -> A (mod bạn) -> B (mod hoang dã) nằm trên 1 đường thẳng
@@ -166,9 +167,11 @@ export class BattleSystem {
   }
 
   /** Gặp lỗi giữa chừng: hiện lỗi lên màn hình, dọn sạch và trả điều khiển cho người chơi. */
-  abort(err) {
-    console.error('[battle]', err);
-    this.ui.toast(`Lỗi trận đấu: ${err?.message ?? err}`, 8000);
+  abort(err, silent = false) {
+    if (!silent) {
+      console.error('[battle]', err);
+      this.ui.toast(`Lỗi trận đấu: ${err?.message ?? err}`, 8000);
+    }
     this.queue = [];
     this.tweens = [];
     this.ui.battleHide();
@@ -189,6 +192,11 @@ export class BattleSystem {
     this.player.forceBody = false;
     this.player.faceYaw = null;
     this.phase = 'none';
+  }
+
+  /** Huỷ trận êm (khi người chơi thoát về menu chính). */
+  cancel() {
+    if (this.active) this.abort(null, true);
   }
 
   /** Bộ giám sát: 1 pha kéo dài bất thường thì tự cứu. */
@@ -309,6 +317,7 @@ export class BattleSystem {
   }
 
   victory() {
+    this.result = 'win';
     const { foe, mine, entry } = this;
     foe.faint();
     this.wild.release(foe); // không còn là mod hoang dã; Effects dọn khi đã mờ hẳn
@@ -325,7 +334,7 @@ export class BattleSystem {
     this.later(Math.max(2, d + 0.5), () => this.finish());
   }
 
-  /** Chiến lợi phẩm rơi xuống đất tại chỗ mod hoang dã gục; lại gần là nhặt (có model riêng, xem foodDefs.js). */
+  /** Chiến lợi phẩm rơi xuống đất tại chỗ mod hoang dã gục; lại gần là nhặt (có model riêng, xem fooddefs.js). */
   dropLoot(foe) {
     const ids = rollDrops(foe.def);
     if (ids.length === 0) return;
@@ -344,6 +353,7 @@ export class BattleSystem {
   }
 
   defeat() {
+    this.result = 'lose';
     const { foe, mine } = this;
     mine.faint();
     foe.win();
@@ -352,17 +362,20 @@ export class BattleSystem {
   }
 
   draw() {
+    this.result = 'draw';
     this.ui.say('Hai bên đều kiệt sức — hoà!');
     this.later(1.5, () => this.finish());
   }
 
   flee() {
+    this.result = 'flee';
     this.phase = 'outro';
     this.ui.say('Bạn rút lui!');
     this.later(0.6, () => this.finish());
   }
 
   finish() {
+    this.state.logEvent?.('battle', { result: this.result ?? 'end', mod: this.entry?.id, foe: this.foe?.def?.id, level: this.entry?.level });
     this.phase = 'outro';
     this.camOn = false;
     this.tweens = [];

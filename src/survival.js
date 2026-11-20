@@ -29,6 +29,13 @@ export class Survival {
     this.warnedExhausted = false;
   }
 
+  /** Đọc lại thể lực / độ đói từ state (sau khi nạp dữ liệu từ server). */
+  sync() {
+    this.stamina = this.state.vitals.stamina;
+    this.hunger = this.state.vitals.hunger;
+    this.exhausted = false;
+  }
+
   get canSprint() {
     return !this.exhausted && this.stamina > 6 && this.hunger > 0;
   }

@@ -10,11 +10,18 @@ import { BattleSystem } from './battle';
 import { ISLAND_DEFS, Landmarks } from './islands';
 import { Survival } from './survival';
 import { FOOD_INFO } from './fooddefs';
-import { TIERS, loadTierIndex, saveTierIndex, chunkConfig } from './quality';
+import { TIERS, chunkConfig } from './quality';
 import { ItemLibrary } from './items';
 import { Drops } from './drops';
 import { Menus } from './menus';
 import { UI } from './ui';
+import { Screens } from './screens';
+import { CloudClient } from './cloud';
+import { SaveManager } from './store';
+import { loadSettings, saveSettings } from './settings';
+
+const GAME_TITLE = 'MAYNORA'; // tên game hiện ở màn hình tải và menu chính
+const GAME_VERSION = 'v0.3';
 
 // --- Đảo ----------------------------------------------------------------
 // Danh sách đảo, kích thước, nhiệm vụ của từng đảo chỉnh trong islands.js.
@@ -23,13 +30,14 @@ const ISLANDS = ISLAND_DEFS;
 const TELEPORT_DELAY = 5; // giây chờ sau khi xong hết nhiệm vụ đảo rồi mới dịch chuyển
 
 // --- Hiệu năng ----------------------------------------------------------
-// Chất lượng chỉnh trong quality.js (4 mức). Game tự hạ mức khi FPS thấp; bạn đổi tay bằng phím [ và ].
+// Chất lượng chỉnh trong quality.js (4 mức). Game tự hạ mức khi FPS thấp; đổi tay bằng phím [ ] hoặc menu Cài đặt.
 const CHUNK_SIZE = 64;
 const FOG_NEAR = 0.55; // sương mù tính theo tỉ lệ tầm nhìn: NEAR càng lớn thì càng ít mờ
 const FOG_FAR = 0.95;
-const savedTier = loadTierIndex();
+const settings = loadSettings(globalThis.localStorage, TIERS.length - 1); // cài đặt RIÊNG của máy này
+let tierIndex = settings.tier;
 // Khử răng cưa chỉ bật ở mức Cao trở lên trên màn hình thường (màn hình độ phân giải cao không cần)
-const ANTIALIAS = window.devicePixelRatio < 1.5 && savedTier >= 2;
+const ANTIALIAS = window.devicePixelRatio < 1.5 && tierIndex >= 2;
 
 // --- Nước ---------------------------------------------------------------
 // KHÔNG cần model nước. Mặc định dùng normal map tự sinh bằng code.
@@ -92,12 +100,6 @@ const sun = new THREE.DirectionalLight(0xffffff, 2.2);
 sun.position.set(100, 200, 60);
 scene.add(sun);
 
-// --- HUD ----------------------------------------------------------------
-const hud = document.createElement('div');
-hud.id = 'hud';
-hud.textContent = 'Đang tải model...';
-document.body.appendChild(hud);
-
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
@@ -134,6 +136,18 @@ function arrowTo(player, tx, tz) {
 
 async function start() {
   const ui = new UI();
+  ui.setDebugVisible(settings.debug);
+  ui.setHudVisible(false); // HUD chỉ hiện khi đã vào game
+  const screens = new Screens(ui, { title: GAME_TITLE, version: GAME_VERSION });
+  screens.showLoading([
+    { id: 'save', label: 'Dữ liệu người chơi' },
+    { id: 'props', label: 'Cây, đá, cỏ' },
+    { id: 'items', label: 'Vật phẩm' },
+    { id: 'mods', label: 'Mod' },
+    { id: 'player', label: 'Nhân vật' },
+    { id: 'island', label: 'Dựng đảo' },
+  ]);
+
   // Lỗi runtime hiện thẳng lên màn hình (đỡ phải mở console mới biết)
   let errorToasts = 0;
   const showError = (msg) => {
@@ -143,43 +157,83 @@ async function start() {
   window.addEventListener('error', (e) => showError(e.message));
   window.addEventListener('unhandledrejection', (e) => showError(e.reason?.message ?? String(e.reason)));
 
-  const state = new GameState(); // đội mod, túi đồ, tiến độ nhiệm vụ, đảo hiện tại (lưu trong localStorage)
+  // trạng thái: 'loading' | 'title' | 'playing' | 'paused'
+  let status = 'loading';
+  let starting = false;
+  let transitioning = false;
+  let teleportIn = null;
+
+  const requestLock = () => {
+    try {
+      renderer.domElement.requestPointerLock?.()?.catch?.(() => {});
+    } catch {
+      /* không khoá được: nhấp vào màn hình để khoá */
+    }
+  };
+  const releaseLock = () => document.exitPointerLock?.();
+
+  // --- Dữ liệu người chơi: đọc bản trong máy ngay; chế độ server chọn ở menu chính ---
+  const summary = (d) => {
+    const t = d?.savedAt > 1 ? new Date(d.savedAt).toLocaleString('vi-VN') : 'không rõ';
+    return `${d?.party?.length ?? 0} mod · ${ISLANDS[d?.islandIndex ?? 0]?.name ?? 'đảo ?'} · ${t}`;
+  };
+  const askConflict = (local, remote) => {
+    releaseLock(); // cần chuột để bấm nút
+    return screens.confirm({
+      title: 'DỮ LIỆU KHÁC NHAU',
+      message: `<b>Máy này:</b> ${summary(local)}<br><b>Server:</b> ${summary(remote)}<br>Bạn muốn giữ bản nào?`,
+      buttons: [
+        { label: 'DÙNG BẢN SERVER', value: 'remote', primary: true },
+        { label: 'GIỮ BẢN TRONG MÁY', value: 'local' },
+      ],
+      cancelValue: 'remote',
+    });
+  };
+  const cloud = new CloudClient();
+  const state = new GameState();
+  const store = new SaveManager({ state, cloud, askConflict });
+  const local = store.readLocal();
+  if (local) state.hydrate(local);
   if (!ISLANDS[state.islandIndex]) state.setIsland(0, true);
+  screens.stepDone('save');
+  let cloudInfo = 'checking'; // 'checking' | 'ready' | 'nodb' | 'none'
+  const cloudText = () =>
+    ({ checking: '☁ Server: đang kiểm tra...', ready: '☁ Server: sẵn sàng', nodb: '☁ Server: chưa cấu hình CSDL', none: '☁ Server: không có máy chủ (chơi offline)' })[cloudInfo];
+  cloud
+    .ping()
+    .then((r) => (cloudInfo = r.db ? 'ready' : 'nodb'))
+    .catch(() => (cloudInfo = 'none'))
+    .finally(() => screens.setTitleStatus(cloudText()));
 
   const terrain = new TerrainGenerator(ISLANDS[state.islandIndex]);
-  const props = new PropScatter(terrain, CHUNK_SIZE); // danh sách model cây/đá/cỏ chỉnh trong propDefs.js
+  const props = new PropScatter(terrain, CHUNK_SIZE); // danh sách model cây/đá/cỏ chỉnh trong propdefs.js
   const player = new Player(camera, renderer.domElement, terrain);
+  player.sensitivity = settings.sens;
   scene.add(player.body);
   const survival = new Survival(state); // thể lực + độ đói
   survival.onMessage = (text) => ui.toast(text, 4000);
   player.survival = survival;
   const library = new ModLibrary(MOD_DEFS);
-  const items = new ItemLibrary(); // model trái cây + chiến lợi phẩm (foodDefs.js)
+  const items = new ItemLibrary(); // model trái cây + chiến lợi phẩm (fooddefs.js)
 
-  // Tải model TRƯỚC khi tạo chunk đầu tiên (chunk cần model để rải)
+  // Tải model TRƯỚC khi tạo chunk đầu tiên (chunk cần model để rải); mỗi xong 1 bước thì tick trên màn hình tải
+  const step = (id, p) => p.then((r) => (screens.stepDone(id), r));
   const [waterMat, waterNormal] = await Promise.all([
     WATER_MODEL ? loadFirstMaterial(WATER_MODEL) : null,
     WATER_NORMAL_MAP ? loadWaterNormal(WATER_NORMAL_MAP) : null,
-    props.load(),
-    player.loadModel(PLAYER_MODEL, PLAYER_OPTS),
-    library.load(),
-    items.load(),
+    step('props', props.load()),
+    step('player', player.loadModel(PLAYER_MODEL, PLAYER_OPTS)),
+    step('mods', library.load()),
+    step('items', items.load()),
   ]);
 
-  let tierIndex = savedTier;
   let tier = TIERS[tierIndex];
   // Chunk được dựng trong Web Worker; cây/đá/cỏ gộp thành vài InstancedMesh dùng chung (ít draw call)
   const chunks = new ChunkManager(scene, terrain, props, { chunkSize: CHUNK_SIZE, ...chunkConfig(tier) }, items);
 
   // Mặt nước phủ được tầm nhìn xa nhất của mọi mức chất lượng
   const maxView = Math.max(...TIERS.map((t) => t.viewRadius)) * CHUNK_SIZE;
-  const water = createWater({
-    size: maxView * 3,
-    tile: WATER_TILE,
-    level: WATER_LEVEL,
-    material: waterMat,
-    normalMap: waterNormal,
-  });
+  const water = createWater({ size: maxView * 3, tile: WATER_TILE, level: WATER_LEVEL, material: waterMat, normalMap: waterNormal });
   scene.add(water.mesh, water.floor);
 
   // Va chạm: không đi xuyên cây, đá; không leo dốc quá đứng; không xuống biển sâu
@@ -207,7 +261,6 @@ async function start() {
       ui.toast(`Nhiệm vụ đảo "${q.title}" hoàn thành!${lead ? ` ${library.def(lead.id)?.name ?? lead.id} lên Lv ${lead.level}` : ''}`, 5000),
   });
   const battle = new BattleSystem({ scene, camera, player, terrain, library, effects, ui, state, wild, drops });
-  const hasMod = () => !!state.lead((id) => library.def(id));
 
   // --- Mức chất lượng + tự điều chỉnh -------------------------------------
   let pixelRatio = 1;
@@ -228,7 +281,8 @@ async function start() {
     camera.updateProjectionMatrix();
     water.setSimple(tier.simpleWater);
     wild.cfg.max = tier.wildMax;
-    saveTierIndex(tierIndex);
+    settings.tier = tierIndex;
+    saveSettings(settings);
     graceUntil = performance.now() + 8000;
     if (!opts.silent) ui.toast(`Chất lượng: ${tier.name}${opts.auto ? ' (tự hạ vì FPS thấp)' : ''}`, 3000);
   }
@@ -259,37 +313,6 @@ async function start() {
     await chunks.waitInitial(sp.x, sp.z, camera, 9); // chờ vài chunk gần nhất (lúc này màn hình đang tối / đang tải)
   }
 
-  let transitioning = false;
-  let teleportIn = null;
-
-  // Túi đồ (mod + vật phẩm) và hộp chọn mod ra trận. Mở cửa sổ thì khoá người chơi; đang đấu / chuyển cảnh thì không mở được.
-  const menus = new Menus({
-    ui,
-    state,
-    library,
-    survival,
-    canOpen: () => !battle.active && !transitioning,
-    setLock: (on) => {
-      if (on) player.locked = true;
-      else if (!battle.active && !transitioning) player.locked = false;
-    },
-  });
-
-  /** Nhấn J: chọn mod trong đội (luôn hiện hộp chọn, kể cả chỉ có 1 mod) rồi vào trận. */
-  function challenge() {
-    const target = wild.nearest(player.position, CHALLENGE_RANGE);
-    if (!target) return ui.toast('Không có mod hoang dã nào ở gần để thách đấu.');
-    if (menus.party().length === 0) return ui.toast('Bạn chưa có mod nào! Hoàn thành nhiệm vụ tân thủ để nhận mod.');
-    target.engaged = true; // đứng yên tại chỗ trong lúc bạn chọn
-    target.moving = false;
-    menus.openSelect(
-      `Chọn mod ra trận đấu với ${target.tag}`,
-      (entry) => battle.start(target, entry),
-      () => {
-        target.engaged = false;
-      },
-    );
-  }
   async function teleportNext() {
     if (transitioning) return;
     transitioning = true;
@@ -307,15 +330,216 @@ async function start() {
     graceUntil = performance.now() + 6000;
   }
 
+  // --- Hành trang (mod + vật phẩm) và hộp chọn mod ra trận ------------------
+  const menus = new Menus({
+    ui,
+    state,
+    library,
+    survival,
+    canOpen: () => status === 'playing' && !battle.active && !transitioning,
+    setLock: (on) => {
+      if (on) player.locked = true;
+      else if (!battle.active && !transitioning) player.locked = false;
+    },
+  });
+  ui.modalEl.onclick = (e) => menus.click(e.target); // chuột: click thẻ mod / vật phẩm / nút
+  menus.onClose = () => {
+    if (status === 'paused') openPauseMenu(); // mở hành trang từ menu tạm dừng thì đóng xong quay lại menu đó
+  };
+
+  /** Nhấn J: chọn mod trong đội (luôn hiện hộp chọn, kể cả chỉ có 1 mod) rồi vào trận. */
+  function challenge() {
+    const target = wild.nearest(player.position, CHALLENGE_RANGE);
+    if (!target) return ui.toast('Không có mod hoang dã nào ở gần để thách đấu.');
+    if (menus.party().length === 0) return ui.toast('Bạn chưa có mod nào! Hoàn thành nhiệm vụ tân thủ để nhận mod.');
+    target.engaged = true; // đứng yên tại chỗ trong lúc bạn chọn
+    target.moving = false;
+    menus.openSelect(
+      `Chọn mod trong Hành trang để đấu với ${target.tag}. Trận đấu diễn ra tự động.`,
+      (entry) => battle.start(target, entry),
+      () => {
+        target.engaged = false;
+      },
+    );
+  }
+
+  // --- Menu chính / tạm dừng / cài đặt -------------------------------------
+  function openSettings() {
+    screens.open({
+      kind: 'panel',
+      title: 'CÀI ĐẶT',
+      controls: [
+        { type: 'choice', label: 'Chất lượng đồ hoạ', options: TIERS.map((t) => t.name), index: tierIndex, onChange: (i) => applyTier(i) },
+        {
+          type: 'slider',
+          label: 'Độ nhạy chuột',
+          min: 0.3,
+          max: 2.5,
+          step: 0.1,
+          value: settings.sens,
+          format: (v) => `${v.toFixed(1)}x`,
+          onChange: (v) => {
+            settings.sens = v;
+            player.sensitivity = v;
+            saveSettings(settings);
+          },
+        },
+        {
+          type: 'toggle',
+          label: 'Bảng thông số hiệu năng (F3)',
+          value: settings.debug,
+          onChange: (b) => {
+            settings.debug = b;
+            ui.setDebugVisible(b);
+            saveSettings(settings);
+          },
+        },
+        { type: 'text', html: 'Chất lượng tự hạ khi FPS thấp. Khi đang chơi, nhấn <kbd>[</kbd> <kbd>]</kbd> để đổi nhanh.' },
+        { type: 'button', label: 'XONG', primary: true, onClick: () => screens.closeTop() },
+      ],
+    });
+  }
+
+  function openTitle() {
+    screens.closeAll();
+    if (menus.active) menus.close();
+    status = 'title';
+    player.locked = true;
+    ui.setHudVisible(false);
+    releaseLock();
+    const hasSave = state.hasProgress();
+    screens.open({
+      kind: 'title',
+      status: cloudText(),
+      controls: [
+        { type: 'button', label: hasSave ? 'TIẾP TỤC' : 'CHƠI', primary: true, hint: 'Lưu trong máy này', onClick: () => beginSession('local') },
+        { type: 'button', label: 'CHƠI ONLINE', hint: 'Lưu lên server', onClick: () => beginSession('cloud') },
+        { type: 'button', label: 'CÀI ĐẶT', onClick: openSettings },
+        { type: 'button', label: 'HƯỚNG DẪN', onClick: () => screens.showHelp() },
+      ],
+    });
+  }
+
+  async function beginSession(mode) {
+    if (starting) return;
+    starting = true;
+    if (mode === 'local') requestLock(); // phải gọi ngay trong lúc còn "thao tác người dùng"
+    screens.closeAll();
+    await ui.fade(true, 350, mode === 'cloud' ? 'Đang kết nối server...' : 'Đang vào đảo...');
+    if (mode === 'cloud') {
+      const r = await store.connect();
+      if (r.error) ui.toast('Không kết nối được server — chơi offline, dữ liệu vẫn lưu trong máy.', 5000);
+      else if (r.data) {
+        state.hydrate(r.data); // dùng dữ liệu của server
+        store.writeLocal(r.data);
+        survival.sync();
+        await enterIsland(state.islandIndex);
+      }
+    } else {
+      store.disconnect();
+    }
+    status = 'playing';
+    player.locked = false;
+    ui.setHudVisible(true);
+    starting = false; // từ giờ Esc / tạm dừng dùng được ngay, không cần chờ hiệu ứng sáng dần
+    await ui.fade(false, 450);
+    if (status === 'playing' && !document.pointerLockElement) requestLock();
+  }
+
+  function openPauseMenu() {
+    screens.closeAll();
+    screens.open({
+      kind: 'panel',
+      title: 'TẠM DỪNG',
+      sub: `${ISLANDS[state.islandIndex].name} · ${store.statusText()}`,
+      controls: [
+        { type: 'button', label: 'TIẾP TỤC', primary: true, onClick: resumeGame },
+        {
+          type: 'button',
+          label: 'HÀNH TRANG',
+          hint: `${menus.party().length} mod · vật phẩm`,
+          onClick: () => {
+            screens.closeAll();
+            menus.openBag();
+          },
+        },
+        { type: 'button', label: 'NHIỆM VỤ', onClick: () => screens.showQuests(quests.snapshot(library)) },
+        { type: 'button', label: 'CÀI ĐẶT', onClick: openSettings },
+        {
+          type: 'button',
+          label: 'LƯU NGAY',
+          hint: store.mode === 'cloud' ? 'Lưu trong máy và lên server' : 'Lưu trong máy này',
+          onClick: async () => {
+            await store.flush(true);
+            ui.toast(store.statusText(), 3000);
+            openPauseMenu();
+          },
+        },
+        { type: 'button', label: 'VỀ MENU CHÍNH', danger: true, onClick: quitToTitle },
+      ],
+      onBack: resumeGame,
+    });
+  }
+
+  function pauseGame() {
+    if (status !== 'playing' || transitioning || starting) return;
+    status = 'paused';
+    releaseLock(); // thả chuột để bấm được nút
+    openPauseMenu();
+  }
+
+  function resumeGame() {
+    screens.closeAll();
+    if (menus.active) menus.close();
+    status = 'playing';
+    requestLock();
+  }
+
+  async function quitToTitle() {
+    const yes = await screens.confirm({
+      title: 'VỀ MENU CHÍNH?',
+      message: 'Tiến trình sẽ được lưu trước khi thoát.',
+      buttons: [
+        { label: 'Ở LẠI', value: false, primary: true },
+        { label: 'VỀ MENU', value: true, danger: true },
+      ],
+      cancelValue: false,
+    });
+    if (!yes) return;
+    battle.cancel();
+    await store.flush(true);
+    openTitle();
+  }
+
+  // --- Phím, chuột, tiêu điểm ------------------------------------------------
+  ui.onHotbar = (a) => {
+    if (status !== 'playing' || transitioning || menus.active) return;
+    if (a === 'bag') menus.toggleBag();
+    else if (a === 'quests') ui.toggleTrackerExpanded();
+    else if (a === 'pause') pauseGame();
+  };
+
   window.addEventListener('keydown', (e) => {
-    if (e.repeat) return;
+    if (e.code === 'F3') {
+      e.preventDefault();
+      settings.debug = !settings.debug;
+      ui.setDebugVisible(settings.debug);
+      saveSettings(settings);
+      return;
+    }
+    if (screens.active) {
+      screens.handleKey(e.code, e); // màn hình tải / menu chính / tạm dừng / cài đặt: nuốt phím
+      return;
+    }
+    if (menus.active) {
+      menus.handleKey(e.code, e); // hành trang / chọn mod: nuốt mọi phím
+      return;
+    }
+    if (status !== 'playing' || e.repeat) return;
     if (e.code === 'BracketRight') return applyTier(tierIndex + 1); // tăng chất lượng
     if (e.code === 'BracketLeft') return applyTier(tierIndex - 1); // giảm chất lượng
     if (transitioning) return;
-    if (menus.active) {
-      menus.handleKey(e.code, e); // túi đồ / chọn mod: nuốt mọi phím
-      return;
-    }
+    if (e.code === 'Escape' || e.code === 'KeyP') return pauseGame();
     if (battle.active) {
       battle.onKey(e.code); // trận đấu tự động; chỉ có F: rút lui
       return;
@@ -325,9 +549,31 @@ async function start() {
     else if (e.code === 'KeyQ') ui.toggleTrackerExpanded(); // thanh nhiệm vụ: gọn <-> chi tiết
     else if (e.code === 'KeyE') ui.toast(survival.eat().message, 2000);
   });
-  window.addEventListener('beforeunload', () => state.save());
 
-  // Tiện cho việc thử nghiệm: mở console (F12), ví dụ game.giveMod('hoa_ti'), game.nextIsland(), game.setTier(0)
+  // Nhấn Esc khi đang khoá chuột: trình duyệt nhả chuột trước (không gửi phím Esc) -> coi như yêu cầu tạm dừng
+  document.addEventListener('pointerlockchange', () => {
+    if (document.pointerLockElement) return;
+    if (status !== 'playing' || transitioning || starting || screens.active) return;
+    if (menus.active) {
+      menus.close();
+      return;
+    }
+    pauseGame();
+  });
+  window.addEventListener('blur', () => pauseGame()); // chuyển cửa sổ khác thì tự tạm dừng
+
+  const saveNow = () => store.beacon();
+  window.addEventListener('beforeunload', saveNow);
+  window.addEventListener('pagehide', saveNow);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') saveNow();
+  });
+  store.onRemoteApplied = () => {
+    survival.sync();
+    enterIsland(state.islandIndex); // bản của server khác bản đang chơi: dựng lại đảo theo bản đó
+  };
+
+  // Tiện cho việc thử nghiệm: mở console (F12), ví dụ game.giveMod('quy_ti'), game.nextIsland(), game.setTier(0)
   window.game = {
     state,
     quests,
@@ -338,6 +584,14 @@ async function start() {
     player,
     menus,
     drops,
+    screens,
+    store,
+    cloud,
+    get status() {
+      return status;
+    },
+    pause: pauseGame,
+    resume: resumeGame,
     giveMod: (id) => {
       state.addMod(id);
       ui.toast(`Đã nhận ${library.def(id)?.name ?? id}`);
@@ -347,9 +601,14 @@ async function start() {
     setTier: (i) => applyTier(i),
   };
 
+  // --- Dựng đảo (làm nền cho menu chính), rồi bắt đầu vòng lặp ---------------
+  screens.setStep('island', 'doing');
   await enterIsland(state.islandIndex);
+  screens.stepDone('island');
+  await new Promise((r) => setTimeout(r, 450)); // cho người dùng kịp thấy "Sẵn sàng!"
+  screens.hideLoading();
+  openTitle();
 
-  // --- Loop -------------------------------------------------------------
   const clock = new THREE.Clock();
   let hudTimer = 0;
   let vitalsTimer = 0;
@@ -362,63 +621,79 @@ async function start() {
   let jsMs = 0;
   let renderMs = 0;
   let frameMs = 16;
+  let orbit = Math.random() * Math.PI * 2;
 
   renderer.setAnimationLoop(() => {
     const rawDt = clock.getDelta();
     const dt = Math.min(rawDt, 0.05);
     const t0 = performance.now();
+    // Game chỉ chạy khi đang chơi và không có màn hình / cửa sổ nào che; còn lại thì đứng yên
+    const running = status === 'playing' && !screens.active && !menus.active;
 
-    player.update(dt);
+    if (running) {
+      state.playtime += dt;
+      player.update(dt);
+      effects.update(dt);
+      wild.update(dt, player.position);
+      landmarks.update(dt, player.position);
+      quests.update(player, dt);
+      battle.update(dt); // phải gọi SAU player.update vì nó điều chỉnh camera
+      drops.update(dt, player.position);
+      store.tick(dt);
+    } else if (status === 'title') {
+      // Menu chính: camera bay vòng quanh đảo làm nền
+      orbit += dt * 0.08;
+      const c = player.position;
+      camera.position.set(c.x + Math.cos(orbit) * 42, c.y + 20, c.z + Math.sin(orbit) * 42);
+      camera.lookAt(c.x, c.y + 2, c.z);
+    }
     chunks.update(player.position.x, player.position.z, camera);
     water.update(dt, player.position.x, player.position.z);
 
-    effects.update(dt);
-    wild.update(dt, player.position);
-    landmarks.update(dt, player.position);
-    quests.update(player, dt);
-    battle.update(dt); // phải gọi SAU player.update vì nó điều chỉnh camera
-    drops.update(dt, player.position);
-
-    // Nhặt thực phẩm (mọc tự nhiên + chiến lợi phẩm rơi ra) khi đi tới gần
-    const picked = chunks
-      .collectFood(player.position.x, player.position.y, player.position.z, PICKUP_RADIUS)
-      .concat(drops.collect(player.position, PICKUP_RADIUS));
-    if (picked.length > 0) {
-      const counts = {};
-      for (const id of picked) counts[id] = (counts[id] ?? 0) + 1;
-      for (const [id, n] of Object.entries(counts)) {
-        state.addFood(id, n);
-        ui.toast(`+${n} ${FOOD_INFO[id].name}`, 1500);
+    if (running) {
+      // Nhặt thực phẩm (mọc tự nhiên + chiến lợi phẩm rơi ra) khi đi tới gần
+      const picked = chunks
+        .collectFood(player.position.x, player.position.y, player.position.z, PICKUP_RADIUS)
+        .concat(drops.collect(player.position, PICKUP_RADIUS));
+      if (picked.length > 0) {
+        const counts = {};
+        for (const id of picked) counts[id] = (counts[id] ?? 0) + 1;
+        for (const [id, n] of Object.entries(counts)) {
+          state.addFood(id, n);
+          ui.toast(`+${n} ${FOOD_INFO[id].name}`, 1500);
+        }
       }
-    }
 
-    // Xong hết nhiệm vụ đảo -> đếm ngược rồi dịch chuyển (chờ nếu đang đấu)
-    if (quests.islandComplete && !battle.active && !transitioning) {
-      if (teleportIn === null) {
-        teleportIn = TELEPORT_DELAY;
-        const next = ISLANDS[(state.islandIndex + 1) % ISLANDS.length];
-        ui.toast(`Hoàn thành mọi nhiệm vụ đảo! Dịch chuyển sang ${next.name} sau ${TELEPORT_DELAY} giây...`, 5000);
+      // Xong hết nhiệm vụ đảo -> đếm ngược rồi dịch chuyển (chờ nếu đang đấu)
+      if (quests.islandComplete && !battle.active && !transitioning) {
+        if (teleportIn === null) {
+          teleportIn = TELEPORT_DELAY;
+          const next = ISLANDS[(state.islandIndex + 1) % ISLANDS.length];
+          ui.toast(`Hoàn thành mọi nhiệm vụ đảo! Dịch chuyển sang ${next.name} sau ${TELEPORT_DELAY} giây...`, 5000);
+        }
+        teleportIn -= dt;
+        if (teleportIn <= 0) {
+          teleportIn = null;
+          teleportNext();
+        }
       }
-      teleportIn -= dt;
-      if (teleportIn <= 0) {
-        teleportIn = null;
-        teleportNext();
-      }
-    }
 
-    // Gợi ý thách đấu khi lại gần mod hoang dã
-    const near = battle.active || menus.active ? null : wild.nearest(player.position, CHALLENGE_RANGE);
-    if (near && !near.met) {
-      near.met = true;
-      state.recordMeet(); // cho nhiệm vụ "Làm quen" (tân thủ) và "Nhà thám hiểm" (đảo)
+      // Gợi ý thách đấu khi lại gần mod hoang dã
+      const near = battle.active ? null : wild.nearest(player.position, CHALLENGE_RANGE);
+      if (near && !near.met) {
+        near.met = true;
+        state.recordMeet(); // cho nhiệm vụ "Làm quen" (tân thủ) và "Nhà thám hiểm" (đảo)
+      }
+      ui.prompt(
+        near
+          ? menus.party().length > 0
+            ? `[J] Thách đấu ${near.tag} (chọn mod ra trận, trận đấu tự động)`
+            : `${near.tag} — bạn chưa có mod. Hoàn thành nhiệm vụ tân thủ (khung bên phải) để nhận mod`
+          : null,
+      );
+    } else if (status !== 'playing') {
+      ui.prompt(null);
     }
-    ui.prompt(
-      near
-        ? hasMod()
-          ? `[J] Thách đấu ${near.tag} (chọn mod ra trận, trận đấu tự động)`
-          : `${near.tag} — bạn chưa có mod. Hoàn thành nhiệm vụ tân thủ (khung bên phải) để nhận mod`
-        : null,
-    );
 
     const t1 = performance.now();
     renderer.render(scene, camera);
@@ -434,7 +709,8 @@ async function start() {
       fps = fpsFrames / fpsTime;
       fpsTime = 0;
       fpsFrames = 0;
-      if (performance.now() > graceUntil && !transitioning) {
+      ui.setFps(`${fps.toFixed(0)} FPS`);
+      if (running && performance.now() > graceUntil && !transitioning) {
         lowSecs = fps < 38 ? lowSecs + 1 : Math.max(0, lowSecs - 1);
         highSecs = fps > 57 ? highSecs + 1 : 0;
         if (lowSecs >= 4) {
@@ -453,39 +729,41 @@ async function start() {
       }
     }
 
-    vitalsTimer += dt;
+    vitalsTimer += rawDt;
     if (vitalsTimer > 0.1) {
       vitalsTimer = 0;
       ui.updateVitals(survival, state.inv, FOOD_INFO);
     }
-    trackerTimer += dt;
+    trackerTimer += rawDt;
     if (trackerTimer > 0.25) {
       trackerTimer = 0;
       ui.updateTracker(quests.snapshot(library)); // thanh nhiệm vụ luôn hiện ở góc phải
-      ui.setTrackerVisible(!battle.active && !transitioning);
+      ui.setTrackerVisible(status !== 'title' && !battle.active && !transitioning);
     }
 
-    hudTimer += dt;
-    if (hudTimer > 0.25) {
+    hudTimer += rawDt;
+    if (hudTimer > 0.25 && settings.debug) {
       hudTimer = 0;
       const p = player.position;
       const info = renderer.info.render;
       const beacon = landmarks.nearestUnvisited(p);
       const def = ISLANDS[state.islandIndex];
       const bound = frameMs > (jsMs + renderMs) * 1.5 + 3 ? 'GPU / vsync' : 'CPU';
-      hud.textContent =
-        `Click: khoá chuột | WASD | Shift: chạy (tốn thể lực + đói) | Space: nhảy | V: góc nhìn | E: ăn nhanh\n` +
-        `J: thách đấu (chọn mod) | I: túi đồ (mod + vật phẩm) | Q: chi tiết nhiệm vụ | F: rút lui khi đang đấu | [ ]: chất lượng\n` +
+      ui.setDebug(
         `${def.name} | hải đăng: ${beacon ? `${arrowTo(player, beacon.x, beacon.z)} ${beacon.dist.toFixed(0)} m` : 'đã thắp hết'} | ` +
-        `mod hoang dã: ${wild.list.length} | trận đấu: ${battle.phase}\n` +
-        `Chất lượng: ${tier.name} | FPS ${fps.toFixed(0)} | khung ${frameMs.toFixed(1)} ms (JS ${jsMs.toFixed(1)} + render ${renderMs.toFixed(1)}) | nghẽn: ${bound}\n` +
-        `draw calls ${info.calls} | tam giác ${(info.triangles / 1000).toFixed(0)}k | phân giải x${pixelRatio.toFixed(2)} | ` +
-        `chunk ${chunks.loadedCount} (chờ ${chunks.pendingCount}${chunks.worker ? '' : ', không có Worker!'}) | XYZ ${p.x.toFixed(0)}, ${p.y.toFixed(0)}, ${p.z.toFixed(0)}`;
+          `mod hoang dã: ${wild.list.length} | trận đấu: ${battle.phase} | ${store.statusText()}\n` +
+          `Chất lượng: ${tier.name} | FPS ${fps.toFixed(0)} | khung ${frameMs.toFixed(1)} ms (JS ${jsMs.toFixed(1)} + render ${renderMs.toFixed(1)}) | nghẽn: ${bound}\n` +
+          `draw calls ${info.calls} | tam giác ${(info.triangles / 1000).toFixed(0)}k | phân giải x${pixelRatio.toFixed(2)} | ` +
+          `chunk ${chunks.loadedCount} (chờ ${chunks.pendingCount}${chunks.worker ? '' : ', không có Worker!'}) | XYZ ${p.x.toFixed(0)}, ${p.y.toFixed(0)}, ${p.z.toFixed(0)}`,
+      );
     }
   });
 }
 
 start().catch((err) => {
   console.error(err);
-  hud.textContent = 'Lỗi khi khởi động, xem console (F12).';
+  const msg = document.createElement('div');
+  msg.style.cssText = 'position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#3a2412;color:#fff3d6;font:700 20px system-ui;text-align:center;padding:24px';
+  msg.textContent = `Lỗi khi khởi động: ${err?.message ?? err}. Mở console (F12) để xem chi tiết.`;
+  document.body.appendChild(msg);
 });

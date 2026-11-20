@@ -1,5 +1,3 @@
-const PREF_KEY = 'infinite-terrain-quality';
-
 /**
  * Các mức chất lượng. Số nào cũng đổi được; game tự hạ mức khi FPS thấp, và bạn đổi tay bằng phím [ ] .
  *  pixelRatio        độ phân giải render (tối đa = tỉ lệ pixel của màn hình)
@@ -19,26 +17,6 @@ export const TIERS = [
 ];
 
 export const DEFAULT_TIER = 1; // "Vừa"
-
-export function loadTierIndex() {
-  try {
-    const raw = localStorage.getItem(PREF_KEY);
-    if (raw === null) return DEFAULT_TIER; // chưa lưu: Number(null) sẽ ra 0 (= mức Thấp) nên phải kiểm tra riêng
-    const v = Number(raw);
-    if (Number.isInteger(v) && v >= 0 && v < TIERS.length) return v;
-  } catch {
-    /* bỏ qua */
-  }
-  return DEFAULT_TIER;
-}
-
-export function saveTierIndex(i) {
-  try {
-    localStorage.setItem(PREF_KEY, String(i));
-  } catch {
-    /* bỏ qua */
-  }
-}
 
 /** Phần cấu hình dành cho ChunkManager. */
 export function chunkConfig(t) {

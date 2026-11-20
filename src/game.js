@@ -10,7 +10,7 @@
 //   register { name }                     -> { ok, pid, key }          (cấp tài khoản ẩn danh; key chỉ hiện 1 lần)
 //   load     { pid, key }                 -> { ok, data|null, version }
 //   save     { pid, key, base, data, events } -> { ok, version } | 409 { ok:false, error:'conflict', version, data }
-import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 
 const MAX_DATA_CHARS = 120_000; // giới hạn kích thước 1 bản lưu
 const MAX_EVENTS = 50; // số sự kiện tối đa mỗi lần lưu
@@ -19,6 +19,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const KEY_RE = /^[0-9a-f]{64}$/i;
 const TYPE_RE = /^[a-z_]{1,32}$/;
 const ENV = process.env;
+const NAME_A = ['May', 'Sao', 'Gio', 'Bien', 'Dao', 'Suong', 'Trang', 'Nang', 'Da', 'Rung'];
+const NAME_B = ['Xanh', 'Bac', 'Vang', 'Tim', 'Hong', 'Nho', 'Cao', 'Xa', 'Sang', 'Lanh'];
+const randomName = () => `${NAME_A[randomInt(NAME_A.length)]}${NAME_B[randomInt(NAME_B.length)]}${randomInt(1000, 10000)}`;
 
 class ApiError extends Error {
   constructor(status, code) {
@@ -86,11 +89,18 @@ export function createHandler({ getSql, env = ENV }) {
       const sql = getSql();
 
       if (body.action === 'register') {
-        const name = String(body.name ?? 'Người chơi').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 24) || 'Người chơi';
-        const pid = randomUUID();
-        const key = randomBytes(32).toString('hex'); // chỉ trả về MỘT LẦN; trong DB chỉ lưu bản băm
-        await sql`insert into players (id, name, key_hash) values (${pid}, ${name}, ${hashKey(key)})`;
-        return send(res, 200, { ok: true, pid, key });
+        const key = randomBytes(32).toString('hex');
+        for (let i = 0; i < 10; i++) {
+          const pid = randomUUID();
+          const name = randomName();
+          const rows = await sql`
+            insert into players (id, name, key_hash)
+            values (${pid}, ${name}, ${hashKey(key)})
+            on conflict do nothing
+            returning id`;
+          if (rows.length > 0) return send(res, 200, { ok: true, pid, key, name });
+        }
+        throw new ApiError(503, 'name_unavailable');
       }
 
       if (body.action === 'load') {

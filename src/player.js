@@ -59,6 +59,7 @@ export class Player {
     this.forceBody = false; // true: luôn hiện nhân vật, kể cả ở góc nhìn thứ 1
     this.faceYaw = null; // khác null: nhân vật xoay dần về hướng này
     this.jumpCount = 0; // số lần nhảy (cho nhiệm vụ)
+    this.sensitivity = 1; // hệ số độ nhạy chuột (chỉnh trong menu cài đặt)
     this.walkable = null; // (x, z) => boolean: có được bước vào chỗ đó không (chặn không cho đi xuống biển sâu)
     this.onBlocked = null; // gọi khi bị chặn (tối đa 1 lần / 3 giây)
     this.blockCd = 0;
@@ -252,8 +253,8 @@ export class Player {
     });
     document.addEventListener('mousemove', (e) => {
       if (this.locked || document.pointerLockElement !== this.dom) return;
-      this.yaw -= e.movementX * MOUSE_SENS; // chuột sang phải -> quay phải (yaw giảm)
-      this.pitch = clamp(this.pitch - e.movementY * MOUSE_SENS, -MAX_PITCH, MAX_PITCH);
+      this.yaw -= e.movementX * MOUSE_SENS * this.sensitivity; // chuột sang phải -> quay phải (yaw giảm)
+      this.pitch = clamp(this.pitch - e.movementY * MOUSE_SENS * this.sensitivity, -MAX_PITCH, MAX_PITCH);
     });
     this.dom.addEventListener(
       'wheel',

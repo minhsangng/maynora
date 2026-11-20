@@ -1,6 +1,6 @@
 create table if not exists players (
   id          uuid primary key default gen_random_uuid(),
-  name        text not null default 'player',
+  name        text not null unique,
   key_hash    text not null,
   created_at  timestamptz not null default now()
 );
@@ -20,3 +20,11 @@ create table if not exists events (
   created_at  timestamptz not null default now()
 );
 create index if not exists events_player_time_idx on events (player_id, created_at desc);
+
+alter table players alter column name drop default;
+
+update players
+set name = 'MaySao' || substr(replace(id::text, '-', ''), 1, 8)
+where name in ('player', 'Player', 'Người chơi');
+
+create unique index if not exists players_name_key on players (name);

@@ -3,12 +3,14 @@ import { modStats } from './mods';
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const hex = (n) => `#${(n ?? 0x88aaff).toString(16).padStart(6, '0')}`;
+const COLS = 2; // số cột của lưới thẻ mod
 
 /**
- * Hai cửa sổ điều khiển bằng bàn phím (con trỏ chuột đang bị khoá nên không dùng chuột):
- *  - Túi đồ (phím I): danh sách mod đang có + vật phẩm ăn được. ↑↓ chọn, Tab đổi cột, Enter ăn món đang chọn.
- *  - Chọn mod ra trận (khi nhấn J gần mod hoang dã): luôn hiện, kể cả khi chỉ có 1 mod.
- *    ↑↓ hoặc 1-9 để chọn, Enter để ra trận, Esc để huỷ.
+ * Hành trang và hộp chọn mod ra trận, dùng chung 1 giao diện (xem theme.js: #m-modal).
+ *  - Hành trang (phím I hoặc nút trong menu tạm dừng): tab MOD = mọi mod đang có (kèm level, chỉ số, chiêu, vật phẩm rơi),
+ *    tab VẬT PHẨM = đồ ăn trong túi (ăn từng món).
+ *  - Chọn mod ra trận (phím J gần mod hoang dã): luôn hiện, kể cả khi chỉ có 1 mod.
+ * Điều khiển bằng bàn phím (↑↓←→ chọn, Tab đổi tab, Enter xác nhận, Esc đóng) và chuột (click thẻ / nút).
  * Khi cửa sổ mở, người chơi bị khoá không đi được (setLock).
  */
 export class Menus {
@@ -17,15 +19,16 @@ export class Menus {
     this.state = state;
     this.library = library;
     this.survival = survival;
-    this.canOpen = canOpen; // () => boolean: có được mở túi đồ lúc này không (không mở khi đang đấu / dịch chuyển)
+    this.canOpen = canOpen; // () => boolean: có được mở hành trang lúc này không (không mở khi đang đấu / chuyển cảnh)
     this.setLock = setLock; // (bool) => void
     this.mode = 'none'; // 'none' | 'bag' | 'select'
+    this.tab = 'mods'; // 'mods' | 'items' (chỉ trong hành trang)
     this.sel = 0; // mod đang chọn
     this.itemSel = 0; // vật phẩm đang chọn
-    this.focus = 'mods'; // cột đang điều khiển trong túi đồ: 'mods' | 'items'
     this.title = '';
     this.onPick = null;
     this.onCancel = null;
+    this.onClose = null; // gọi khi HÀNH TRANG đóng (để menu tạm dừng mở lại)
   }
 
   get active() {
@@ -47,9 +50,10 @@ export class Menus {
     else if (this.mode === 'none' && this.canOpen()) this.openBag();
   }
 
-  openBag() {
+  openBag(tab = 'mods') {
+    if (this.mode !== 'none') return;
     this.mode = 'bag';
-    this.focus = 'mods';
+    this.tab = tab;
     this.sel = 0;
     this.itemSel = 0;
     this.setLock(true);
@@ -68,49 +72,19 @@ export class Menus {
   }
 
   close() {
+    const wasBag = this.mode === 'bag';
     this.mode = 'none';
     this.onPick = null;
     this.onCancel = null;
     this.ui.setModal(null);
     this.setLock(false);
+    if (wasBag) this.onClose?.();
   }
 
-  /** Trả true nếu phím đã được cửa sổ xử lý (luôn true khi đang mở, để không lọt xuống điều khiển nhân vật). */
-  handleKey(code, ev) {
-    if (this.mode === 'none') return false;
-    ev?.preventDefault?.();
-    return this.mode === 'select' ? this.selectKey(code) : this.bagKey(code);
-  }
-
-  move(delta) {
-    if (this.mode === 'bag' && this.focus === 'items') {
-      const n = this.items().length;
-      if (n > 0) this.itemSel = (this.itemSel + delta + n) % n;
-    } else {
-      const n = this.party().length;
-      if (n > 0) this.sel = (this.sel + delta + n) % n;
-    }
-    this.render();
-  }
-
-  selectKey(code) {
-    if (code === 'Escape' || code === 'KeyJ') {
-      const cb = this.onCancel;
-      this.close();
-      cb?.();
-      return true;
-    }
-    if (code === 'ArrowUp' || code === 'KeyW') this.move(-1);
-    else if (code === 'ArrowDown' || code === 'KeyS') this.move(1);
-    else if (code === 'Enter' || code === 'NumpadEnter' || code === 'Space') this.confirm();
-    else {
-      const m = /^(?:Digit|Numpad)([1-9])$/.exec(code);
-      if (m && Number(m[1]) <= this.party().length) {
-        this.sel = Number(m[1]) - 1;
-        this.confirm();
-      }
-    }
-    return true;
+  cancel() {
+    const cb = this.onCancel;
+    this.close();
+    cb?.();
   }
 
   confirm() {
@@ -120,81 +94,135 @@ export class Menus {
     if (entry) cb?.(entry);
   }
 
-  bagKey(code) {
-    if (code === 'KeyI' || code === 'Escape') {
-      this.close();
-      return true;
-    }
-    if (code === 'ArrowUp' || code === 'KeyW') this.move(-1);
-    else if (code === 'ArrowDown' || code === 'KeyS') this.move(1);
-    else if (code === 'Tab') {
-      this.focus = this.focus === 'mods' && this.items().length > 0 ? 'items' : 'mods';
+  eatItem(id = null) {
+    this.ui.toast(this.survival.eat(id).message, 2000);
+    this.render();
+  }
+
+  // ---------------------------------------------------------------- điều khiển
+
+  /** Trả true nếu phím đã được xử lý (luôn true khi đang mở, để không lọt xuống điều khiển nhân vật). */
+  handleKey(code, ev) {
+    if (this.mode === 'none') return false;
+    ev?.preventDefault?.();
+    const inItems = this.mode === 'bag' && this.tab === 'items';
+
+    if (this.mode === 'select' && (code === 'Escape' || code === 'KeyJ')) this.cancel();
+    else if (this.mode === 'bag' && (code === 'Escape' || code === 'KeyI')) this.close();
+    else if (this.mode === 'bag' && code === 'Tab') {
+      this.tab = this.tab === 'mods' ? 'items' : 'mods';
       this.render();
-    } else if (code === 'KeyE') {
-      this.ui.toast(this.survival.eat().message, 2000);
-      this.render();
-    } else if (code === 'Enter' || code === 'NumpadEnter' || code === 'Space') {
-      if (this.focus === 'items') {
-        const id = this.items()[this.itemSel];
-        if (id) this.ui.toast(this.survival.eat(id).message, 2000);
-        this.render();
-      }
-    } else if (this.focus === 'mods') {
+    } else if (code === 'ArrowUp' || code === 'KeyW') this.move(0, -1, inItems);
+    else if (code === 'ArrowDown' || code === 'KeyS') this.move(0, 1, inItems);
+    else if (code === 'ArrowLeft' || code === 'KeyA') this.move(-1, 0, inItems);
+    else if (code === 'ArrowRight' || code === 'KeyD') this.move(1, 0, inItems);
+    else if (this.mode === 'bag' && code === 'KeyE') this.eatItem();
+    else if (code === 'Enter' || code === 'NumpadEnter' || code === 'Space') {
+      if (this.mode === 'select') this.confirm();
+      else if (inItems) this.eatItem(this.items()[this.itemSel]);
+    } else {
       const m = /^(?:Digit|Numpad)([1-9])$/.exec(code);
-      if (m && Number(m[1]) <= this.party().length) {
+      if (m && !inItems && Number(m[1]) <= this.party().length) {
         this.sel = Number(m[1]) - 1;
-        this.render();
+        if (this.mode === 'select') this.confirm();
+        else this.render();
       }
     }
     return true;
   }
 
-  // ---------------------------------------------------------------- hiển thị
-
-  modRow(entry, i, selected, dim) {
-    const def = this.library.def(entry.id);
-    return `<div class="mm-row ${selected ? 'sel' : ''} ${dim ? 'dim' : ''}"><span class="nm"><span class="dot" style="background:${hex(def.color)}"></span>${i + 1}. ${def.name}</span><small>Lv ${entry.level}</small></div>`;
+  move(dx, dy, inItems) {
+    if (inItems) {
+      const n = this.items().length;
+      if (n > 0) this.itemSel = clamp(this.itemSel + dx + dy, 0, n - 1);
+    } else {
+      const n = this.party().length;
+      if (n > 0) this.sel = clamp(this.sel + dx + dy * COLS, 0, n - 1);
+    }
+    this.render();
   }
 
-  detail(entry) {
+  /** Chuột: click vào phần tử có data-a (thẻ mod, vật phẩm, tab, nút). */
+  click(target) {
+    const t = target?.closest?.('[data-a]');
+    if (!t || this.mode === 'none') return;
+    const a = t.dataset.a;
+    const i = Number(t.dataset.i);
+    if (a === 'close') this.close();
+    else if (a === 'tab') {
+      this.tab = t.dataset.i;
+      this.render();
+    } else if (a === 'mod') {
+      this.sel = i;
+      this.render();
+    } else if (a === 'item') {
+      this.itemSel = i;
+      this.render();
+    } else if (a === 'eat') this.eatItem(this.items()[i]);
+    else if (a === 'confirm') this.confirm();
+    else if (a === 'cancel') this.cancel();
+  }
+
+  // ---------------------------------------------------------------- hiển thị
+
+  card(entry, i, selected) {
+    const def = this.library.def(entry.id);
+    const st = modStats(def, entry.level);
+    return `<div class="mm-card ${selected ? 'sel' : ''}" data-a="mod" data-i="${i}"><span class="emblem" style="background:${hex(def.color)}">${def.name.trim()[0] ?? '?'}</span>` +
+      `<span class="cn"><b>${def.name}</b><small>Lv ${entry.level} · HP ${st.maxHp}</small></span></div>`;
+  }
+
+  detail(entry, party) {
     if (!entry) return '';
     const def = this.library.def(entry.id);
     const st = modStats(def, entry.level);
-    const moves = def.moves.map((m) => `${m.name} (${m.power})`).join(', ');
-    return `<div class="mm-detail"><b>${def.name}</b> · Lv ${entry.level}<br>HP <b>${st.maxHp}</b> · Công <b>${st.atk.toFixed(0)}</b> · Thủ <b>${st.defense.toFixed(0)}</b> · Tốc <b>${st.spd.toFixed(0)}</b><br>Chiêu: ${moves}</div>`;
+    // thanh chỉ số so với mod mạnh nhất trong đội ở từng chỉ số
+    const all = party.map((e) => modStats(this.library.def(e.id), e.level));
+    const mx = (k) => Math.max(1, ...all.map((s) => s[k]));
+    const bar = (label, v, max) =>
+      `<div class="st"><span>${label}</span><div class="m-bar"><i style="width:${Math.min(100, (v / max) * 100)}%"></i></div><em>${Math.round(v)}</em></div>`;
+    const moves = def.moves.map((m) => `<i>${m.name} · ${m.power}</i>`).join('');
+    const drops = (def.drops ?? [{ item: 'meat' }]).map((d) => FOOD_INFO[d.item]?.name).filter(Boolean).join(', ');
+    return `<div class="mm-detail"><div class="dh"><span class="emblem big" style="background:${hex(def.color)}">${def.name.trim()[0] ?? '?'}</span><div><b>${def.name}</b>Lv ${entry.level}</div></div>` +
+      bar('HP', st.maxHp, mx('maxHp')) + bar('Công', st.atk, mx('atk')) + bar('Thủ', st.defense, mx('defense')) + bar('Tốc', st.spd, mx('spd')) +
+      `<div class="mv"><b>Chiêu:</b> ${moves}</div>${drops ? `<div class="mv"><b>Rơi khi bị đánh bại:</b> ${drops}</div>` : ''}</div>`;
   }
 
   render() {
     const party = this.party();
     this.sel = clamp(this.sel, 0, Math.max(0, party.length - 1));
-    const modsHtml = party.length
-      ? party.map((e, i) => this.modRow(e, i, i === this.sel, this.mode === 'bag' && this.focus !== 'mods')).join('')
+    const items = this.items();
+    this.itemSel = clamp(this.itemSel, 0, Math.max(0, items.length - 1));
+
+    const grid = party.length
+      ? `<div class="mm-grid">${party.map((e, i) => this.card(e, i, i === this.sel)).join('')}</div>`
       : '<div class="mm-empty">Chưa có mod nào — hoàn thành nhiệm vụ tân thủ để nhận mod.</div>';
 
     if (this.mode === 'select') {
       this.ui.setModal(
-        `<div class="mm-title">${this.title}</div><div class="mm-col">${modsHtml}${this.detail(party[this.sel])}</div>` +
-          `<div class="mm-hint">↑↓ hoặc 1–9: chọn · Enter: ra trận (trận đấu tự động) · Esc: huỷ</div>`,
+        `<div class="mm-top"><div class="pk-head">RA TRẬN</div></div><div class="mm-sub">${this.title}</div>` +
+          `<div class="mm-cols">${grid}${this.detail(party[this.sel], party)}</div>` +
+          `<div class="mm-foot"><span class="mm-hint"><kbd>↑</kbd><kbd>↓</kbd> hoặc <kbd>1</kbd>–<kbd>9</kbd> chọn · <kbd>Enter</kbd> ra trận · <kbd>Esc</kbd> huỷ</span>` +
+          `<span class="mm-act"><button class="pk-plank small primary" data-a="confirm">RA TRẬN</button><button class="pk-plank small danger" data-a="cancel">HUỶ</button></span></div>`,
       );
       return;
     }
 
-    const items = this.items();
-    this.itemSel = clamp(this.itemSel, 0, Math.max(0, items.length - 1));
     const itemsHtml = items.length
-      ? items
+      ? `<div class="mm-list">${items
           .map((id, i) => {
             const f = FOOD_INFO[id];
-            const sel = this.focus === 'items' && i === this.itemSel;
-            return `<div class="mm-row ${sel ? 'sel' : ''}"><span class="nm">${f.name} ×${this.state.inv[id]}</span><small>+${f.hunger} đói${f.stamina ? `, +${f.stamina} thể lực` : ''}</small></div>`;
+            return `<div class="mm-row ${i === this.itemSel ? 'sel' : ''}" data-a="item" data-i="${i}"><span>${f.name} ×${this.state.inv[id]}<br><small>+${f.hunger} đói${f.stamina ? `, +${f.stamina} thể lực` : ''}</small></span><button class="pk-plank small primary" data-a="eat" data-i="${i}">ĂN</button></div>`;
           })
-          .join('')
+          .join('')}</div>`
       : '<div class="mm-empty">Túi trống — nhặt táo, quả mọng, nấm trên đảo hoặc đánh bại mod hoang dã.</div>';
+
     this.ui.setModal(
-      `<div class="mm-title">Túi đồ <small>[I] đóng</small></div><div class="mm-cols">` +
-        `<div class="mm-col"><h4>Mod của bạn (${party.length})</h4>${modsHtml}${this.detail(party[this.sel])}</div>` +
-        `<div class="mm-col"><h4>Vật phẩm</h4>${itemsHtml}</div></div>` +
-        `<div class="mm-hint">↑↓: chọn · Tab: đổi cột (Mod / Vật phẩm) · Enter: ăn món đang chọn · E: ăn nhanh · I hoặc Esc: đóng</div>`,
+      `<div class="mm-top"><div class="pk-head">HÀNH TRANG</div><button class="mm-x" data-a="close">✕</button></div>` +
+        `<div class="mm-tabs"><button class="mm-tab ${this.tab === 'mods' ? 'on' : ''}" data-a="tab" data-i="mods">MOD (${party.length})</button>` +
+        `<button class="mm-tab ${this.tab === 'items' ? 'on' : ''}" data-a="tab" data-i="items">VẬT PHẨM (${items.length})</button></div>` +
+        (this.tab === 'mods' ? `<div class="mm-cols">${grid}${this.detail(party[this.sel], party)}</div>` : itemsHtml) +
+        `<div class="mm-foot"><span class="mm-hint"><kbd>↑</kbd><kbd>↓</kbd><kbd>←</kbd><kbd>→</kbd> chọn · <kbd>Tab</kbd> đổi tab · <kbd>Enter</kbd> ăn · <kbd>E</kbd> ăn nhanh · <kbd>I</kbd> đóng</span></div>`,
     );
   }
 }

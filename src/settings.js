@@ -1,7 +1,7 @@
 const KEY = 'dao-mod-settings-v1';
 const OLD_TIER_KEY = 'infinite-terrain-quality';
 
-/** Cài đặt RIÊNG CỦA MÁY NÀY (không đưa lên đám mây): chất lượng đồ hoạ, độ nhạy chuột, bảng thông số hiệu năng. */
+/** Cài đặt RIÊNG CỦA MÁY NÀY (không đưa lên server): chất lượng đồ hoạ, độ nhạy chuột, bảng thông số hiệu năng. */
 export const DEFAULT_SETTINGS = { tier: 1, sens: 1, debug: false };
 
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));

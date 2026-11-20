@@ -49,7 +49,7 @@ function mk(tag, cls, html) {
  * (↑↓ chọn, ←→ chỉnh, Enter kích hoạt, Esc quay lại).
  */
 export class Screens {
-  constructor(ui, { title = 'ĐẢO MOD', version = '' } = {}) {
+  constructor(ui, { title = 'MAYNORA', version = '' } = {}) {
     this.ui = ui;
     this.root = ui.root;
     this.title = title;
@@ -162,8 +162,10 @@ export class Screens {
       const node = this.buildControl(p, c);
       holder.appendChild(node);
     }
+    // Ô chọn sẵn: nút nổi bật (primary) nếu panel mở đầu bằng các nút (menu, hộp thoại); còn panel có hàng chỉnh
+    // (cài đặt) thì chọn hàng đầu tiên để dùng phím mũi tên chỉnh được ngay.
     const first = p.focusables.findIndex((c) => c.primary);
-    this.setIdx(p, first >= 0 ? first : 0);
+    this.setIdx(p, p.focusables[0]?.type === 'button' && first >= 0 ? first : 0);
 
     if (p.kind === 'title') {
       p.el = mk('div', 'pk-screen pk-titlescreen', `<div class="pk-logo">${this.title}</div>`);

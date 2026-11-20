@@ -27,7 +27,7 @@ export class SaveManager {
     this.again = false;
     this.status = 'local'; // 'local' | 'saving' | 'cloud' | 'offline'
     this.lastSavedAt = 0;
-    this.onRemoteApplied = null; // (data) => void: đã nạp bản của đám mây vào state (main dựng lại đảo)
+    this.onRemoteApplied = null; // (data) => void: đã nạp bản của server vào state (main dựng lại đảo)
     state.onChange = () => this.markDirty();
   }
 
@@ -65,8 +65,8 @@ export class SaveManager {
     const at = t ? ` · lúc ${t}` : '';
     switch (this.status) {
       case 'saving': return 'Đang lưu...';
-      case 'cloud': return `Đã lưu lên đám mây${at}`;
-      case 'offline': return `Mất kết nối đám mây — đã lưu trong máy${at}`;
+      case 'cloud': return `Đã lưu lên server${at}`;
+      case 'offline': return `Mất kết nối server — đã lưu trong máy${at}`;
       default: return `Đã lưu trong máy${at}`;
     }
   }
@@ -145,7 +145,7 @@ export class SaveManager {
     }
   }
 
-  /** Gọi khi đóng tab / ẩn trang: ghi bản trong máy ngay và gửi nhanh lên máy chủ (nếu đang ở chế độ đám mây). */
+  /** Gọi khi đóng tab / ẩn trang: ghi bản trong máy ngay và gửi nhanh lên máy chủ (nếu đang ở chế độ server). */
   beacon() {
     if (!this.dirty && this.mode !== 'cloud') return;
     const data = this.state.serialize();
@@ -156,10 +156,10 @@ export class SaveManager {
     }
   }
 
-  // ---------------------------------------------------------------- kết nối đám mây
+  // ---------------------------------------------------------------- kết nối server
 
   /**
-   * Kết nối đám mây và chọn bản dữ liệu để dùng.
+   * Kết nối server và chọn bản dữ liệu để dùng.
    * Trả về { source: 'cloud' | 'local', data } - data = bản cần nạp vào state, null = giữ nguyên state hiện tại.
    */
   async connect() {
@@ -189,9 +189,9 @@ export class SaveManager {
       }
       if ((remote.data.savedAt ?? 0) >= (local.savedAt ?? 0)) {
         this.setStatus('cloud');
-        return { source: 'cloud', data: remote.data }; // bản đám mây mới hơn (hoặc bằng)
+        return { source: 'cloud', data: remote.data }; // bản server mới hơn (hoặc bằng)
       }
-      // Bản trong máy mới hơn bản đám mây: hỏi để khỏi ghi đè nhầm
+      // Bản trong máy mới hơn bản server: hỏi để khỏi ghi đè nhầm
       const choice = this.askConflict ? await this.askConflict(local, remote.data) : 'local';
       this.setStatus('cloud');
       if (choice === 'remote') return { source: 'cloud', data: remote.data };
