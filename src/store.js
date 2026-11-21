@@ -1,7 +1,7 @@
 import { CloudError } from './cloud';
 
-const LOCAL_KEY = 'dao-mod-save-v2';
-const LEGACY_KEY = 'infinite-terrain-save-v1'; // bản lưu của phiên bản cũ
+const LOCAL_KEY = 'maynora-save-v2';
+const LEGACY_KEY = 'maynora-save-v1'; // bản lưu của phiên bản cũ
 const AUTOSAVE_SECONDS = 6; // lưu tự động sau chừng này giây kể từ lần thay đổi cuối
 
 /**
