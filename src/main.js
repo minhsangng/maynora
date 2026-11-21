@@ -19,6 +19,7 @@ import { Screens } from './screens';
 import { CloudClient } from './cloud';
 import { SaveManager } from './store';
 import { loadSettings, saveSettings } from './settings';
+import './touch';
 
 const GAME_TITLE = 'MAYNORA'; // tên game hiện ở màn hình tải và menu chính
 const GAME_VERSION = 'v0.3';

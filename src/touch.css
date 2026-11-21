@@ -1,0 +1,127 @@
+@import url('https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;700;800&display=swap');
+
+html, body { overscroll-behavior: none; }
+
+.tc-root {
+  --tc-l: max(16px, env(safe-area-inset-left));
+  --tc-r: max(16px, env(safe-area-inset-right));
+  --tc-b: max(16px, env(safe-area-inset-bottom));
+  --tc-t: max(10px, env(safe-area-inset-top));
+  position: fixed;
+  inset: 0;
+  z-index: 10; /* dưới HUD bấm được (hotbar z 15), dưới menu (z 40+) */
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  font-family: 'Baloo 2', 'Fredoka', 'Nunito', 'Trebuchet MS', system-ui, sans-serif;
+}
+.tc-root.hidden { display: none; }
+
+.tc-zone { position: absolute; top: 0; bottom: 0; pointer-events: auto; touch-action: none; }
+.tc-left { left: 0; width: 45%; }
+.tc-right { right: 0; width: 55%; }
+
+/* --- cần gạt (hiện tại chỗ ngón tay chạm) --- */
+.tc-hint, .tc-base {
+  position: absolute;
+  width: 120px; height: 120px;
+  margin: -60px 0 0 -60px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 243, 214, .55);
+  background: rgba(60, 35, 15, .28);
+  pointer-events: none;
+}
+.tc-hint { left: calc(var(--tc-l) + 76px); bottom: calc(var(--tc-b) + 6px); margin: 0 0 0 -60px; opacity: .55; }
+.tc-base { display: none; }
+.tc-base.on { display: block; }
+.tc-knob {
+  position: absolute; left: 50%; top: 50%;
+  width: 56px; height: 56px; margin: -28px 0 0 -28px;
+  border-radius: 50%;
+  background: linear-gradient(#bd854c, #9b6330);
+  border: 3px solid #4d2e18;
+  box-shadow: 0 3px 0 #4d2e18;
+}
+
+/* --- nút bấm --- */
+.tc-btn {
+  position: absolute;
+  pointer-events: auto;
+  touch-action: none;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  border: 3px solid #4d2e18;
+  border-radius: 50%;
+  background: linear-gradient(#bd854c, #9b6330);
+  color: #fff3d6;
+  font-family: 'Baloo 2', 'Fredoka', 'Nunito', 'Trebuchet MS', system-ui, sans-serif;
+  font-weight: 800; font-size: 12px; line-height: 1.05;
+  text-shadow: 0 1px 0 rgba(60, 30, 10, .7);
+  box-shadow: 0 4px 0 #4d2e18;
+  opacity: .9;
+  -webkit-tap-highlight-color: transparent;
+}
+.tc-btn b { font-size: 22px; font-weight: 800; }
+.tc-btn.down, .tc-btn.on { transform: translateY(3px); box-shadow: 0 1px 0 #4d2e18; filter: brightness(1.18); }
+.tc-btn.on { background: linear-gradient(#7fbf5a, #4f8d36); }
+
+.tc-jump  { width: 84px; height: 84px; right: var(--tc-r); bottom: var(--tc-b); }
+.tc-fight { width: 64px; height: 64px; right: calc(var(--tc-r) + 12px); bottom: calc(var(--tc-b) + 102px); }
+.tc-run   { width: 62px; height: 62px; right: calc(var(--tc-r) + 100px); bottom: calc(var(--tc-b) + 6px); }
+.tc-eat   { width: 56px; height: 56px; right: calc(var(--tc-r) + 92px); bottom: calc(var(--tc-b) + 78px); }
+.tc-view  { width: 46px; height: 46px; right: calc(var(--tc-r) + 172px); bottom: calc(var(--tc-b) + 14px); }
+.tc-retreat {
+  display: none;
+  width: auto; height: 52px; padding: 0 22px;
+  border-radius: 14px;
+  right: var(--tc-r); bottom: var(--tc-b);
+  background: linear-gradient(#e0605b, #b53b37);
+  font-size: 16px; flex-direction: row;
+}
+
+/* --- đang đánh nhau: chỉ còn nút RÚT LUI --- */
+.tc-root.battle .tc-zone, .tc-root.battle .tc-hint, .tc-root.battle .tc-jump, .tc-root.battle .tc-fight,
+.tc-root.battle .tc-run, .tc-root.battle .tc-eat, .tc-root.battle .tc-view { display: none; }
+.tc-root.battle .tc-retreat { display: flex; }
+body.tc-battle #m-hotbar { display: none; }
+
+/* --- nhắc xoay ngang --- */
+.tc-rotate {
+  position: absolute; left: 50%; top: calc(var(--tc-t) + 44px); transform: translateX(-50%);
+  padding: 6px 14px; border-radius: 12px; border: 3px solid #4d2e18;
+  background: #f7ebd0; color: #4a3320; font-weight: 700; font-size: 13px; white-space: nowrap;
+  pointer-events: none; display: none;
+}
+@media (orientation: portrait) { .tc-rotate.show { display: block; } }
+
+/* --- chỉnh HUD có sẵn cho màn hình nhỏ --- */
+body.touch #m-hotbar {
+  top: var(--tc-t, 10px); bottom: auto; right: auto; left: 50%;
+  transform: translateX(-50%); gap: 6px;
+}
+body.touch #m-hotbar button { padding: 3px 9px 5px; font-size: 13px; }
+body.touch #m-hotbar kbd { display: none; }
+body.touch #m-vitals {
+  top: 10px; bottom: auto; left: max(10px, env(safe-area-inset-left));
+  width: 176px; padding: 5px 9px 5px; font-size: 11px;
+}
+body.touch #m-tracker {
+  top: 10px; right: max(10px, env(safe-area-inset-right));
+  width: 188px; padding: 6px 10px 6px; font-size: 11px; transform: none;
+  box-shadow: 0 3px 0 rgba(60, 35, 15, .5);
+  max-height: 40vh; overflow: hidden;
+}
+body.touch #m-tracker:before { display: none; }                       /* bỏ miếng băng keo */
+body.touch #m-tracker .th { font-size: 13px; margin: 0; padding: 3px 0; pointer-events: auto; cursor: pointer; }
+body.touch #m-tracker .th small { display: none; }                    /* bỏ chữ "Q chi tiết" */
+body.touch #m-tracker .th::after { content: '▾'; opacity: .6; }
+body.touch #m-tracker.tc-min .th::after { content: '▸'; }
+body.touch #m-tracker .ts,
+body.touch #m-tracker .hint,
+body.touch #m-tracker .tq.done,
+body.touch #m-tracker .tq .d { display: none; }                       /* chỉ giữ nhiệm vụ chưa xong */
+body.touch #m-tracker .tq { margin: 4px 0; }
+body.touch #m-tracker .tq .m-bar { height: 7px; }
+body.touch #m-tracker.tc-min > :not(.th) { display: none; }           /* thu gọn: chỉ còn tiêu đề */
+body.touch #m-prompt { font-size: 14px; padding: 5px 14px 7px; max-width: 44vw; text-align: center; }
+body.touch #m-fps { display: none; }

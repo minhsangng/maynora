@@ -44,6 +44,7 @@ export class Player {
     this.dom = dom;
     this.terrain = terrain;
     this.keys = new Set();
+    this.moveAxis = { x: 0, y: 0 }; // cần gạt ảo trên điện thoại
     this.vy = 0;
     this.bodyYaw = 0;
     this.armLength = 6; // khoảng cách cam ở góc nhìn thứ 3
@@ -249,7 +250,7 @@ export class Player {
     window.addEventListener('blur', () => this.keys.clear());
 
     this.dom.addEventListener('click', () => {
-      void this.dom.requestPointerLock();
+      void this.dom.requestPointerLock?.()?.catch?.(() => {});
     });
     document.addEventListener('mousemove', (e) => {
       if (this.locked || document.pointerLockElement !== this.dom) return;
@@ -272,8 +273,9 @@ export class Player {
     const cy = Math.cos(this.yaw);
 
     // Di chuyển theo hướng nhìn (chỉ trên mặt phẳng XZ)
-    const f = this.locked ? 0 : (k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0);
-    const r = this.locked ? 0 : (k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0);
+    const ax = this.moveAxis;
+    const f = this.locked ? 0 : clamp((k.has('KeyW') ? 1 : 0) - (k.has('KeyS') ? 1 : 0) + ax.y, -1, 1);
+    const r = this.locked ? 0 : clamp((k.has('KeyD') ? 1 : 0) - (k.has('KeyA') ? 1 : 0) + ax.x, -1, 1);
     let dx = -sy * f + cy * r;
     let dz = -cy * f - sy * r;
     const len = Math.hypot(dx, dz);
